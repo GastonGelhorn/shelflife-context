@@ -46,7 +46,10 @@ READ_TOOLS = "Read,Glob,Grep"
 JEV_TOOLS = ",".join("mcp__plugin_jevmate_jev__" + name for name in
                      ("ask", "cluster", "decide", "diff", "rank", "session", "sift", "tests"))
 OTHER_PLUGINS = ("cowork-plugin-management@synced", "design@synced", "data@synced", "engineering@synced",
-                 "render@synced", "productivity@synced", "claude-subconscious@claude-subconscious")
+                 "render@synced", "productivity@synced", "claude-subconscious@claude-subconscious",
+                 # Installed, it would load with its server switched off (SHELFLIFE_CONTEXT_OFF) and the agent
+                 # reads that failed server as memory being down, even beside the pilot's own.
+                 "shelflife-context@gastongelhorn")
 VARIANTS = {
     "none": {"kernel": None, "jevmate": False},
     "jevmate": {"kernel": None, "jevmate": True},
@@ -129,7 +132,8 @@ def prepare(root, variant, jev_command):
 
 def invoke(claude, root, prompt, mcp_path, allowed, model):
     command = [claude, "-p", prompt, "--output-format", "stream-json", "--verbose",
-               "--mcp-config", str(mcp_path), "--disallowedTools", TOOLS_OFF, "--allowedTools", allowed]
+               "--mcp-config", str(mcp_path), "--strict-mcp-config",  # the user's own MCP servers stay out
+               "--disallowedTools", TOOLS_OFF, "--allowedTools", allowed]
     if model:
         command += ["--model", model]
     # The pilot wires its own kernel; an installed plugin must not write fictional prompts into real memory.
