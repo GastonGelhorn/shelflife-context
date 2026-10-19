@@ -138,5 +138,114 @@
     "report": "~/.shelflife-context/compat-runs/20261007T085538-claude-v09.json"
    }
   }
+ },
+ {
+  "at": "2026-10-13T07:50:51+00:00",
+  "kernel": "0.10.0",
+  "jev": "jev 1.10.0",
+  "python": "3.14.3",
+  "os": "Darwin 27.0.0",
+  "clients": {
+   "claude": "2.1.287 (Claude Code)",
+   "codex": null
+  },
+  "results": {
+   "claude-v04": {
+    "passed": false,
+    "checks": "6/10",
+    "failed": [
+     "fresh_session_answer_names_the_change",
+     "fresh_session_projection_requires_review",
+     "recommendation_flagged_after_change",
+     "recommendation_linked_by_inference"
+    ],
+    "client": "2.1.287 (Claude Code)",
+    "minutes": 1.2,
+    "error": null,
+    "report": "~/.shelflife-context/compat-runs/20261013T075219-claude-v04.json",
+    "failed_first": [
+     "fresh_session_answer_names_the_change",
+     "fresh_session_projection_requires_review",
+     "recommendation_flagged_after_change",
+     "recommendation_linked_by_inference"
+    ]
+   },
+   "claude-v06": {
+    "passed": true,
+    "checks": "9/9",
+    "failed": [],
+    "client": "2.1.287 (Claude Code)",
+    "minutes": 1.1,
+    "error": null,
+    "report": "~/.shelflife-context/compat-runs/20261013T075332-claude-v06.json"
+   },
+   "claude-v09": {
+    "passed": true,
+    "checks": "5/5",
+    "failed": [],
+    "client": "2.1.287 (Claude Code)",
+    "minutes": 1.5,
+    "error": null,
+    "report": "~/.shelflife-context/compat-runs/20261013T075437-claude-v09.json"
+   },
+   "claude-hookless": {
+    "passed": true,
+    "checks": "5/5",
+    "failed": [],
+    "client": "2.1.287 (Claude Code)",
+    "minutes": 0.4,
+    "error": null,
+    "report": "~/.shelflife-context/compat-runs/20261013T075607-claude-hookless.json"
+   }
+  }
+ },
+ {
+  "at": "2026-10-19T07:24:25+00:00",
+  "kernel": "0.10.0",
+  "jev": "jev 1.10.0",
+  "python": "3.14.3",
+  "os": "Darwin 27.0.0",
+  "clients": {
+   "claude": "2.1.287 (Claude Code)",
+   "codex": null
+  },
+  "results": {
+   "claude-v04": {
+    "passed": true,
+    "checks": "10/10",
+    "failed": [],
+    "client": "2.1.287 (Claude Code)",
+    "minutes": 1.2,
+    "error": null,
+    "report": "~/.shelflife-context/compat-runs/20261019T072425-claude-v04.json"
+   },
+   "claude-v06": {
+    "passed": true,
+    "checks": "9/9",
+    "failed": [],
+    "client": "2.1.287 (Claude Code)",
+    "minutes": 0.8,
+    "error": null,
+    "report": "~/.shelflife-context/compat-runs/20261019T072535-claude-v06.json"
+   },
+   "claude-v09": {
+    "passed": true,
+    "checks": "5/5",
+    "failed": [],
+    "client": "2.1.287 (Claude Code)",
+    "minutes": 1.1,
+    "error": null,
+    "report": "~/.shelflife-context/compat-runs/20261019T072622-claude-v09.json"
+   },
+   "claude-hookless": {
+    "passed": true,
+    "checks": "5/5",
+    "failed": [],
+    "client": "2.1.287 (Claude Code)",
+    "minutes": 0.3,
+    "error": null,
+    "report": "~/.shelflife-context/compat-runs/20261019T072727-claude-hookless.json"
+   }
+  }
  }
 ]

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -79,3 +80,36 @@ class RegressionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class CompatMatrixClientTests(unittest.TestCase):
+    """2026-10-19: a scheduled run inside the desktop app found nvm's stale claude 2.1.47 first, ran it with
+    node 10, and the sessions it did start refused to run inside the parent session (CLAUDECODE)."""
+
+    def fake(self, folder, text):
+        folder.mkdir(parents=True, exist_ok=True)
+        script = folder / "claude"
+        script.write_text(f"#!/bin/sh\necho '{text}'\n")
+        script.chmod(0o755)
+        return script
+
+    def test_newest_working_client_wins_over_path_order(self):
+        from tests.compat_matrix import newest
+        with tempfile.TemporaryDirectory() as tmp:
+            old = self.fake(Path(tmp, "nvm"), "2.1.47 (Claude Code)")
+            new = self.fake(Path(tmp, "brew"), "2.1.287 (Claude Code)")
+            broken = Path(tmp, "broken", "claude")
+            broken.parent.mkdir()
+            broken.write_text("#!/bin/sh\nexit 1\n")
+            broken.chmod(0o755)
+            path = os.pathsep.join([str(broken.parent), str(old.parent), str(new.parent), "/usr/bin:/bin"])
+            self.assertEqual(newest("claude", path=path), (str(new), "2.1.287 (Claude Code)"))
+
+    def test_client_folder_goes_first_and_parent_session_is_dropped(self):
+        from tests.compat_matrix import client_env
+        base = {"PATH": "/old/node/bin:/usr/bin:/brew/bin", "CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "x",
+                "CLAUDE_PLUGIN_ROOT": "/p", "CLAUDE_CONFIG_DIR": "/c", "HOME": "/h"}
+        env = client_env("/brew/bin/claude", None, base=base)
+        self.assertEqual(env["PATH"].split(os.pathsep), ["/brew/bin", "/old/node/bin", "/usr/bin"])
+        self.assertEqual({k for k in env if k != "PATH"}, {"CLAUDE_CONFIG_DIR", "HOME"})

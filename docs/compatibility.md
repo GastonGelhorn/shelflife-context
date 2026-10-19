@@ -4,6 +4,14 @@ End-to-end checks run against the real clients (`python3 -m tests.compat_matrix`
 
 | When (UTC) | Kernel | jev | Check | Client | Result | Failed |
 | --- | --- | --- | --- | --- | --- | --- |
+| 2026-10-19 07:24 | 0.10.0 | jev 1.10.0 | claude-v04 | 2.1.287 (Claude Code) | pass 10/10 |  |
+| 2026-10-19 07:24 | 0.10.0 | jev 1.10.0 | claude-v06 | 2.1.287 (Claude Code) | pass 9/9 |  |
+| 2026-10-19 07:24 | 0.10.0 | jev 1.10.0 | claude-v09 | 2.1.287 (Claude Code) | pass 5/5 |  |
+| 2026-10-19 07:24 | 0.10.0 | jev 1.10.0 | claude-hookless | 2.1.287 (Claude Code) | pass 5/5 |  |
+| 2026-10-13 07:50 | 0.10.0 | jev 1.10.0 | claude-v04 | 2.1.287 (Claude Code) | FAIL 6/10 | fresh_session_answer_names_the_change, fresh_session_projection_requires_review, recommendation_flagged_after_change, recommendation_linked_by_inference; first attempt failed: fresh_session_answer_names_the_change, fresh_session_projection_requires_review, recommendation_flagged_after_change, recommendation_linked_by_inference |
+| 2026-10-13 07:50 | 0.10.0 | jev 1.10.0 | claude-v06 | 2.1.287 (Claude Code) | pass 9/9 |  |
+| 2026-10-13 07:50 | 0.10.0 | jev 1.10.0 | claude-v09 | 2.1.287 (Claude Code) | pass 5/5 |  |
+| 2026-10-13 07:50 | 0.10.0 | jev 1.10.0 | claude-hookless | 2.1.287 (Claude Code) | pass 5/5 |  |
 | 2026-10-07 08:53 | 0.9.0 | jev 1.9.3 | claude-v04 | 2.1.287 (Claude Code) | pass 10/10 |  |
 | 2026-10-07 08:53 | 0.9.0 | jev 1.9.3 | claude-v06 | 2.1.287 (Claude Code) | pass 9/9 |  |
 | 2026-10-07 08:53 | 0.9.0 | jev 1.9.3 | claude-v09 | 2.1.287 (Claude Code) | pass 5/5 |  |
