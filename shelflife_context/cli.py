@@ -14,7 +14,7 @@ from .adapters import HookBlock, block, configuration, envelope, hook_response, 
 from .budget import Budget
 from .capture import policy as capture_policy
 from .common import KernelError, canonical, quantity
-from .compiler import Compiler
+from .compiler import HOOK_BUDGET, Compiler
 from .judge import JevCommand
 from .planner import NeedPlan
 from .protocol import parse_json, read_event
@@ -326,7 +326,8 @@ def execute(args, store):
     judge = make_judge(args)
     rules = capture_policy(store)
     budget = Budget(8) if command == "hook" else None
-    compiler = Compiler(store, getattr(args, "budget", 2048), judge if args.strategy == "jev" else None,
+    packet_bytes = getattr(args, "budget", None) or (HOOK_BUDGET[args.client] if command == "hook" else 2048)
+    compiler = Compiler(store, packet_bytes, judge if args.strategy == "jev" else None,
                         deadline=budget, allow_remote=rules["allow_remote_judge"])
     if command == "serve":
         from .mcp import serve

@@ -217,6 +217,21 @@ class InterfaceTests(unittest.TestCase):
             self.assertEqual(packet["claims"], [])
             self.assertTrue(packet["turn"]["token"])
 
+    def test_the_hook_packet_is_sized_for_its_client(self):
+        for n in range(8):
+            self.store.remember("deploy", f"rule_{n}", f"rule {n}: " + "x" * 200, "x", kind="project")
+            self.store.set_standing("deploy", f"rule_{n}", "on", "owner")
+        sizes = {}
+        for client in ("codex", "claude"):
+            event = canonical({"hook_event_name": "UserPromptSubmit", "prompt": "Explain SQLite", "cwd": str(self.workspace),
+                               "session_id": client})
+            process = self.run_cli("hook", "--client", client, "--workspace", str(self.workspace), stdin=event)
+            context = json.loads(process.stdout)["hookSpecificOutput"]["additionalContext"]
+            sizes[client] = (len(context[context.index("{"):].encode()), len(packet_of(context)["claims"]))
+        self.assertLessEqual(sizes["codex"][0], 2048)
+        self.assertLessEqual(sizes["claude"][0], 4096)
+        self.assertGreater(sizes["claude"][1], sizes["codex"][1])
+
     def test_hook_subprocess_invalid_event_fails_open_unless_closed(self):
         process = self.run_cli("hook", "--client", "codex", "--workspace", str(self.workspace), stdin="not json")
         self.assertEqual(process.returncode, 0)
