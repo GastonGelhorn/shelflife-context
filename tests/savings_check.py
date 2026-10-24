@@ -76,8 +76,8 @@ CAUSE = ({"line_tax", "tax.py"}, {"floor", "trunc", "//", "round down", "rounds 
 
 def jev_home(base):
     home = base / "jev-home"
-    if not home.exists():
-        home.mkdir(parents=True)
+    home.mkdir(parents=True, exist_ok=True)
+    if not (home / "config.json").exists():
         for real in (os.environ.get("JEV_HOME"), Path.home() / ".config" / "jev", Path.home() / ".config" / "typesafe"):
             if real and (Path(real) / "config.json").exists():
                 for name in ("config.json", "api_key"):  # the judge set up, nothing else
@@ -247,15 +247,30 @@ class Unusable(Exception):
     pass
 
 
-def preflight(claude, model, env):
-    """One small request, so an expired sign-in stops the bench before twelve sessions report it."""
-    done = subprocess.run([claude, "-p", "Reply with ok.", "--output-format", "json", "--model", model],
-                          stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=180, env=env)
+def preflight(claude, model):
+    """One small request, so an expired sign-in stops the bench before twelve sessions report it. The user's
+    plugins load here, so jev gets a home of its own that is thrown away."""
+    with tempfile.TemporaryDirectory() as folder:
+        done = subprocess.run([claude, "-p", "Reply with ok.", "--output-format", "json", "--model", model],
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=180, env=environment(Path(folder)))
     try:
         result = json.loads(done.stdout)
     except ValueError:
         return (done.stderr or done.stdout or "no answer").strip()[-300:]
     return result.get("result") if result.get("is_error") else None
+
+
+def judge_elsewhere(home, jev_command):
+    """Where jev would send a request from the bench's home, when that is off this machine: the kernel judges
+    only locally, so such a bench would measure Shelflife with no judge at all."""
+    from shelflife_context.judge import is_local
+    done = subprocess.run([jev_command, "rank", "--dry-run", "--json", "--instructions", "Is `candidate` relevant to `query`?",
+                           "--query", "q"], input="c\n", capture_output=True, text=True, timeout=60, env=environment(home))
+    try:
+        url = json.loads(done.stdout)["url"]
+    except (ValueError, KeyError, TypeError):
+        return (done.stderr or done.stdout or "jev did not answer").strip()[-300:]
+    return None if is_local(url) else url
 
 
 def spread(values):
@@ -346,12 +361,16 @@ def main():
     if base.exists() and any(base.iterdir()):
         print(canonical({"error": "Supply an empty disposable workspace."}))
         return 1
-    problem = preflight(args.claude, args.model, environment(base / "jev-home"))
+    problem = preflight(args.claude, args.model)
     if problem:  # checked before the workspace exists, so the same one can be used again
         print(canonical({"error": "Claude Code cannot make a request: " + problem}))
         return 1
     base.mkdir(parents=True, exist_ok=True)
     home = jev_home(base)
+    elsewhere = judge_elsewhere(home, args.jev_command)
+    if elsewhere:
+        print(canonical({"error": f"jev in {home} sends to {elsewhere}, not this machine; set the judge up with `jev setup`."}))
+        return 1
     report = {"client": subprocess.run([args.claude, "--version"], capture_output=True, text=True).stdout.strip(),
               "model": args.model, "sessions": args.sessions, "started": time.strftime("%Y-%m-%d %H:%M"), "runs": []}
     out = base / "report.json"
