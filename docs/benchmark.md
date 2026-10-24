@@ -57,7 +57,7 @@ local judge. 546 prompt and fact pairs were labelled by hand, asking whether a c
 prompt would want that fact; 91 were relevant. Each version is replayed from a pinned commit on a fresh copy of
 the store whose turns are cleared, so what a session already received is only what the replay sent it.
 
-| | v0.10.1 | v0.11 | v0.11, judge not loaded |
+| | v0.10.2 | v0.11 | v0.11, judge not loaded |
 | --- | --- | --- | --- |
 | Packets carrying claims | 81% | 60% | 61% |
 | Claims per packet | 2.17 | 1.45 | 1.05 |
@@ -97,7 +97,7 @@ Two changes were measured and left out:
 `memory --pretty report --days 7` reads the Claude Code transcripts of the last days and prices three things
 at each session's model: the packets (written to the prompt cache once, then re-read by every later request
 until the next compaction), the requests whose only work was a memory tool call, and the requests made after
-the Stop hook handed a turn back to save a fact. On the same week as the replay, with v0.10.1, the three came
+the Stop hook handed a turn back to save a fact. On the same week as the replay, with v0.10, the three came
 to 0.8% of those sessions' cost: 34% packets, 29% memory-only requests (71 of 72 were `memory_capture`) and 37%
 hand-backs. v0.11 hands nothing back by default (`memory policy --stop-nudge on` restores it) and asks for a
 capture in the same message as the turn's first other tool call, which adds no request.
