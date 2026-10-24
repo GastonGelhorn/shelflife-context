@@ -113,6 +113,7 @@ ADDED_COLUMNS = (
     ("sessions", "notice", "TEXT"),
     ("statements", "cues", "TEXT"),
     ("sessions", "context_since", "TEXT"),
+    ("sessions", "rules_sent", "TEXT"),
 )
 # What counts as regret about a capture: taken back, forgotten or revoked within a week, or replaced by the
 # user within the hour. A later change of mind is a change, not a misreading.
@@ -816,13 +817,13 @@ class Store:
                                seen_at=excluded.seen_at""", (self.scope, text(session_id, 256), host, canonical(chain), self.clock()))
 
     def session_field(self, session_id, name):
-        if name not in {"standing_sent", "notice", "context_since"}:
+        if name not in {"standing_sent", "notice", "context_since", "rules_sent"}:
             raise KernelError("Unsupported session field.")
         row = self.db.execute(f"SELECT {name} FROM sessions WHERE scope=? AND session_id=?", (self.scope, session_id)).fetchone()
         return row[0] if row else None
 
     def set_session_field(self, session_id, name, value):
-        if name not in {"standing_sent", "notice", "context_since"}:
+        if name not in {"standing_sent", "notice", "context_since", "rules_sent"}:
             raise KernelError("Unsupported session field.")
         with self.db:
             self.db.execute(f"UPDATE sessions SET {name}=? WHERE scope=? AND session_id=?", (value, self.scope, session_id))

@@ -100,6 +100,19 @@ class QuietPacketTests(unittest.TestCase):
         after = self.prompt("the deploy pipeline again?")
         self.assertTrue([c for c in after["claims"] if c["entity"] == "deploy"])
 
+    def test_the_reader_rules_go_once_per_session_context(self):
+        from shelflife_context.adapters import session_start_response
+        start = {"cwd": str(self.workspace), "hook_event_name": "SessionStart", "session_id": "s1"}
+        session_start_response(start, self.workspace, self.store)
+        self.assertTrue(self.prompt("which pipeline runs the deploy?").get("reader_rules"))
+        self.store.remember("deploy", "region", "eu-west-1", canonical("eu-west-1"))
+        again = self.prompt("which region does the deploy go to?")
+        self.assertTrue(again["claims"])
+        self.assertNotIn("reader_rules", again)
+        session_start_response(start | {"source": "compact"}, self.workspace, self.store)
+        self.now = timestamp_offset(self.now, 1)
+        self.assertTrue(self.prompt("the deploy pipeline again?").get("reader_rules"))
+
     def test_pasted_text_with_a_question_is_still_served(self):
         packet = self.prompt("<pasted_content>\nError: deploy pipeline failed at step 3\n</pasted_content>\nwhy?")
         self.assertTrue(packet.get("claims"))

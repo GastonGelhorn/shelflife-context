@@ -97,14 +97,16 @@ class Compiler:
         self.store, self.budget, self.jev = store, budget, jev
         self.deadline, self.allow_remote = deadline, allow_remote
 
-    def project(self, query, strategy="rules", plan=None, as_of=None, extra=None, pinned=(), delivered=(), fill=None):
+    def project(self, query, strategy="rules", plan=None, as_of=None, extra=None, pinned=(), delivered=(), fill=None,
+                known_rules=()):
         """`extra` holds envelope fields (the turn token, capture instructions) that count toward
         the byte budget and make an otherwise empty packet worth delivering. `pinned` are record ids
         delivered whatever the question (standing facts the session has not received yet). `delivered`
         are ids the session already holds: they are not sent again for being relevant, only when a
         changed premise or a review brings them. `fill` is (holder, key, items), a list inside `extra` that
         gives way to the claims: after them, the items whose id the session does not already hold go into
-        holder[key] while the packet stays within budget."""
+        holder[key] while the packet stays within budget. `known_rules` are reader rules an earlier packet of
+        this session context carried: they are not sent again."""
         started = time.perf_counter()
         if fill:
             fill[0].pop(fill[1], None)  # a retry starts again from the claims
@@ -245,7 +247,10 @@ class Compiler:
         if reviews:
             packet["review"] = [{"id": r["id"], "recorded_at": r["recorded_at"], "changed": r["changed"]} for r in reviews]
         if selected or warnings:
-            packet["reader_rules"] = rules_for([by_id[i] for i in ordered], standing, reviews)
+            # ~760 bytes on every packet that carried a claim; the session keeps them from the first one.
+            needed = [r for r in rules_for([by_id[i] for i in ordered], standing, reviews) if r not in known_rules]
+            if needed:
+                packet["reader_rules"] = needed
 
         def entry(row):
             # Dates, not microseconds, and no evidence id (the trace keeps it): a claim used to take ~240 bytes
@@ -317,7 +322,7 @@ class Compiler:
                  "as_of": at, "historical": as_of is not None,
                  "selected": included, "reasons": {i: reasons[i] for i in included},
                  "excluded": excluded, "missing_needs": missing, "warnings": warnings,
-                 "bytes": len(content.encode()), "delivery": "prepared", "host_attachment": "unknown",
+                 "rules": packet.get("reader_rules", []) if content else [], "bytes": len(content.encode()), "delivery": "prepared", "host_attachment": "unknown",
                  "observation": "projection_only", "usage": usage,
                  "latency_ms": round((time.perf_counter() - started) * 1000, 3)}
         self.store.save_trace(trace)
@@ -351,12 +356,13 @@ class Compiler:
         if snapshot_digest(records, relations, projection.trace["selected"]) != projection.trace["snapshot"]:
             raise KernelError("Context changed before delivery; regenerate the projection.")
 
-    def prepare(self, query, strategy="rules", extra=None, pinned=(), delivered=(), fill=None):
+    def prepare(self, query, strategy="rules", extra=None, pinned=(), delivered=(), fill=None, known_rules=()):
         """Project, then revalidate right before delivery; one retry reuses the recorded plan so a
         concurrent change costs no second round of judgments."""
         plan = None
         for attempt in range(2):
-            projection = self.project(query, strategy, plan=plan, extra=extra, pinned=pinned, delivered=delivered, fill=fill)
+            projection = self.project(query, strategy, plan=plan, extra=extra, pinned=pinned, delivered=delivered, fill=fill,
+                                      known_rules=known_rules)
             try:
                 self.revalidate(projection)
                 return projection
