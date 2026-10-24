@@ -56,7 +56,7 @@ The host agent does the extraction. The kernel never asks a second generative mo
 
 1. It requires an open turn in a session bound to the server's host process. A turn whose origin is `continuation` or `unknown` can only produce quarantined captures.
 2. It rejects invalid keys, values longer than 200 characters, values shaped like instructions, and secrets.
-3. It enforces caps of 2 per turn, 10 per session and 30 per day. A fact over a cap is logged as omitted, so it still shows up in the metrics.
+3. It enforces caps of 2 per turn, 10 per session in any 24 hours and 30 per day. A fact over a cap is logged as omitted, so it still shows up in the metrics.
 4. It checks tombstones before and after judging.
 5. When the agent cites the user's words (`quote`), they must be in the authored part of the message: case, accents, quote marks and spacing are ignored, and four in five of the quote's words in one sentence also match. A quote found only in the pasted part is someone else's (`quoted_source`); a quote found nowhere is refused (`quote_not_found`). The cited sentence becomes the evidence.
 6. It asks jev, in one request, whether the authored part of the message asserts the fact, which category the fact belongs to, whether the writer is joking about it, and whether they say it used to be true and has since stopped being true. Only when the sentence stating the fact opens with a work verb does a second request ask whether the writer is asking for a piece of work rather than stating how things are. Authored text leaves out fenced blocks, quoted lines, mail headers, anything after a reply marker, and lines of log output, JSON or URLs.

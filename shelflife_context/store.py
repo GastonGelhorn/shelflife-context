@@ -949,9 +949,11 @@ class Store:
         def count(where, *args):
             return self.db.execute(f"SELECT count(*) FROM captures_log WHERE scope=? AND outcome IN ('captured','quarantined') {where}",
                                    (self.scope, *args)).fetchone()[0]
+        day_ago = timestamp_offset(self.clock(), -86400)
+        # A session's cap counts its last 24 hours: a session kept open for days goes on saving what is said in it.
         return {"turn": count("AND session_id=? AND turn_key=?", session_id, turn_key),
-                "session": count("AND session_id=?", session_id),
-                "day": count("AND recorded_at>=?", timestamp_offset(self.clock(), -86400))}
+                "session": count("AND session_id=? AND recorded_at>=?", session_id, day_ago),
+                "day": count("AND recorded_at>=?", day_ago)}
 
     def pending_proposal_count(self):
         return self.db.execute("SELECT count(*) FROM proposals WHERE scope=? AND status='pending'", (self.scope,)).fetchone()[0]

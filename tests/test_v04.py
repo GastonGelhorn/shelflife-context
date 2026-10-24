@@ -295,6 +295,16 @@ class AutonomyTests(unittest.TestCase):
         self.assertEqual([r["status"] for r in results], ["captured", "captured", "omitted"])
         self.assertIn({"outcome": "omitted", "reason": "cap", "count": 1}, self.store.capture_metrics())
 
+    def test_a_session_open_for_days_goes_on_saving(self):
+        for i in range(5):
+            packet, _ = self.prompt(f"Dos datos más, ronda {i}")
+            self.capture(packet, (f"a{i}", "x", "1"), (f"b{i}", "x", "2"))
+        packet, _ = self.prompt("Otro dato")
+        self.assertEqual(self.capture(packet, ("c", "x", "3"))[0]["status"], "omitted", "ten in a day is the session's cap")
+        self.now = "2026-10-06T13:00:00+00:00"  # the next day, the same session
+        packet, _ = self.prompt("Otro dato, mañana")
+        self.assertEqual(self.capture(packet, ("d", "x", "4"))[0]["status"], "captured")
+
     def test_a_forget_during_a_slow_capture_wins(self):
         existing = self.store.remember("user", "manager", "Ana", "Owner CLI", trust="captured")
         base = answers()
