@@ -346,12 +346,12 @@ def main():
     if base.exists() and any(base.iterdir()):
         print(canonical({"error": "Supply an empty disposable workspace."}))
         return 1
-    base.mkdir(parents=True, exist_ok=True)
-    home = jev_home(base)
-    problem = preflight(args.claude, args.model, environment(home))
-    if problem:
+    problem = preflight(args.claude, args.model, environment(base / "jev-home"))
+    if problem:  # checked before the workspace exists, so the same one can be used again
         print(canonical({"error": "Claude Code cannot make a request: " + problem}))
         return 1
+    base.mkdir(parents=True, exist_ok=True)
+    home = jev_home(base)
     report = {"client": subprocess.run([args.claude, "--version"], capture_output=True, text=True).stdout.strip(),
               "model": args.model, "sessions": args.sessions, "started": time.strftime("%Y-%m-%d %H:%M"), "runs": []}
     out = base / "report.json"
