@@ -165,7 +165,9 @@ class JevCommand:
                 with open(path, "w", encoding="utf-8") as handle:
                     handle.write(query)
                 argv = [*argv, "--query", "@" + path]
-            process = subprocess.run([self.command, *argv], input=stdin, capture_output=True, text=True, timeout=limit)
+            # Tagged as shelflife in jev's ledger, so a session's own figures never count the memory's judging.
+            env = {**os.environ, "JEV_AGENT": "shelflife"}
+            process = subprocess.run([self.command, *argv], input=stdin, capture_output=True, text=True, timeout=limit, env=env)
         except (OSError, subprocess.SubprocessError) as exc:
             raise JudgeError("jev is unavailable or timed out.") from exc
         finally:
