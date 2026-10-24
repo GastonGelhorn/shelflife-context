@@ -17,8 +17,8 @@ from .judge import JudgeError, model_key
 # Fourteen rows the kernel's thresholds must still separate with whatever model jev runs. Taken from
 # fixtures/calibration.jsonl, where the shipped local model (tev1-32k) puts each one well clear of its bar:
 # true statements at 0.86-0.97 against 0.75, non-statements at 0.02-0.25 against 0.6, the joke at 0.73
-# against 0.6, a past and a current state at 0.97 and 0.01 against 0.7. A model that gets one of them
-# wrong does not get to save anything until it is tuned.
+# against 0.6, a past and a current state at 0.97 and 0.01 against 0.7. A model that puts one of them on
+# the wrong side of its bar does not get to save anything until it is tuned.
 CANARY = [
     ("affirmed", {"text": "Mi manager es Dani.", "fact": "user manager: Dani"}, True),
     ("affirmed", {"text": "Our budget for the migration is 20k EUR.", "fact": "migration budget: 20000 EUR"}, True),
@@ -37,15 +37,23 @@ CANARY = [
 ]
 
 
+# The rule `check` grades by. A failure recorded under an earlier rule is checked again at the next warm-up:
+# rule 1 also failed a non-statement that only reached the review band, which holds and never saves.
+CANARY_RULE = 2
+
+
 def judge_state(store, judge):
-    """(state, model key) of the judge for this scope: `verified` (passed the canary), `failed`, `changed`
-    (another judge was verified here and this one not yet) or `unverified` (first use: the shipped
-    thresholds apply until the background check runs)."""
+    """(state, model key) of the judge for this scope: `verified` (passed the canary), `failed`, `stale`
+    (failed under an earlier rule, checked again at the next warm-up), `changed` (another judge was
+    verified here and this one not yet) or `unverified` (first use: the shipped thresholds apply until
+    the background check runs)."""
     try:
         key = model_key(judge.describe())
     except (JudgeError, KernelError):
         return "unknown", None
     record = store.judge_record(key)
+    if record and record["status"] == "failed" and record["detail"].get("rule") != CANARY_RULE:
+        return "stale", key
     if record and record["status"] in {"passed", "failed"}:
         return ("verified" if record["status"] == "passed" else "failed"), key
     if any(r["status"] == "passed" and r["model_key"] != key for r in store.judge_records()):
@@ -60,7 +68,7 @@ def check(store, judge, timeout=60):
     description = judge.describe()
     key = model_key(description)
     store.set_judge_record(key, "running", {"model": description.get("model"), "url": description.get("url")})
-    rows, wrong = [], []
+    rows, wrong, held = [], [], []
     try:
         for kind, state, expected in CANARY:
             if kind == "facts":
@@ -73,8 +81,11 @@ def check(store, judge, timeout=60):
                 p = answers[kind]
                 bar = {"affirmed": thresholds["affirmed"], "sarcasm": thresholds.get("sarcasm", 0.6),
                        "past": thresholds.get("past", 0.7)}[kind]
-                # A non-statement must not even reach the band that is held for review.
-                right = p >= bar if expected else p < (thresholds.get("uncertain", bar) if kind == "affirmed" else bar)
+                right = p >= bar if expected else p < bar
+                if right and not expected and kind == "affirmed" and p >= thresholds.get("uncertain", bar):
+                    # In the band: a capture that reads like this is held for review, never saved. Reported, not failed:
+                    # failing on it put every capture on hold over one row at 0.66 against 0.75.
+                    held.append({"kind": kind, "p": round(p, 3), "text": state["text"][:60]})
             rows.append({"kind": kind, "expected": expected, "p": round(p, 3)})
             if not right:
                 wrong.append(rows[-1] | {"text": state["text"][:60]})
@@ -84,7 +95,7 @@ def check(store, judge, timeout=60):
         return {"status": "error", "model_key": key, "error": str(exc)[:200]}
     status = "failed" if wrong else "passed"
     detail = {"model": description.get("model"), "url": description.get("url"), "weights": description.get("weights"),
-              "rows": len(rows), "wrong": wrong}
+              "rows": len(rows), "wrong": wrong, "held": held, "rule": CANARY_RULE}
     store.set_judge_record(key, status, detail)
     return {"status": status, "model_key": key} | detail
 

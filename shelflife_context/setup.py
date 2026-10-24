@@ -81,6 +81,7 @@ def _plugin_disabled_here(root):
 
 
 def _calibration_line(config, backend):
+    from .calibration import CANARY_RULE
     from .judge import model_key
     from .store import Store
     store = Store(config["db"], config["scope"])
@@ -91,6 +92,9 @@ def _calibration_line(config, backend):
         store.close()
     if record and record["status"] == "passed":
         return "ok", "calibration", f"this judge passed the canary on {record['checked_at'][:10]}"
+    if record and record["status"] == "failed" and record["detail"].get("rule") != CANARY_RULE:
+        return "warn", "calibration", "this judge failed an earlier canary rule: captures are held for review until the " \
+                                      "next session start checks it again (or run `shelflife-context memory calibrate --check`)"
     if record and record["status"] == "failed":
         wrong = len(record["detail"].get("wrong", []))
         return "warn", "calibration", (f"this judge got {wrong} canary row(s) wrong: captures are held for review. Tune the "

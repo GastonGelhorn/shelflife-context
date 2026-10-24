@@ -12,7 +12,10 @@ import unittest
 from shelflife_context import cli
 
 from shelflife_context.adapters import hook_response, packet_of, stop_response
+from shelflife_context.calibration import CANARY, CANARY_RULE, check, judge_state
 from shelflife_context.capture import locate_quote, segments
+from shelflife_context.judge import model_key
+from shelflife_context.warm import warm
 from shelflife_context.common import canonical, timestamp, timestamp_offset
 from shelflife_context.compiler import READER_RULES, Compiler
 from shelflife_context.mcp import INSTRUCTIONS, Server
@@ -288,6 +291,55 @@ class StatedDecisionsTests(unittest.TestCase):
             {"entity": "invoicer", "predicate": "overpayment_policy", "value": "overpayment rejected with errors.Overpayment",
              "quote": "an overpayment is rejected with a new `errors.Overpayment`; we never keep it as credit."}])
         self.assertEqual([r["status"] for r in results], ["captured"] * 3)
+
+
+class CanaryRuleTests(unittest.TestCase):
+    """The canary fails a judge only for a row on the wrong side of a bar; a row in the review band is reported."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.store = Store(Path(self.temp.name) / "memory.sqlite", create=True)
+        self.judge = FakeJudge()
+
+    def tearDown(self):
+        self.store.close()
+        self.temp.cleanup()
+
+    def answering(self, ana):
+        """Each canary row answered as expected, the third person's statement at `ana`."""
+        canary = {(kind if kind != "facts" else "count", state["text"], state.get("fact")): expected
+                  for kind, state, expected in CANARY}
+
+        def ask(qid, state, spec):
+            expected = canary.get((qid, state.get("text"), state.get("fact")))
+            if spec[0] == "choice":
+                if qid == "count":
+                    return {"none": 0.02 if expected else 0.9, "one": 0.98 if expected else 0.1, "two": 0.0, "several": 0.0}
+                return {o: (1.0 if n == 0 else 0.0) for n, o in enumerate(spec[2])}
+            if qid == "affirmed" and state.get("text") == "Ana dijo que su manager es Dani.":
+                return ana
+            if expected is None:
+                return 0.95 if qid == "affirmed" else 0.05
+            return 0.95 if expected else 0.05
+        return ask
+
+    def test_a_row_in_the_review_band_is_reported_not_failed(self):
+        self.judge.ask_fn = self.answering(0.659)
+        result = check(self.store, self.judge)
+        self.assertEqual((result["status"], result["wrong"], result["rule"]), ("passed", [], CANARY_RULE))
+        self.assertEqual(result["held"][0]["p"], 0.659)
+
+    def test_a_row_past_the_bar_still_fails(self):
+        self.judge.ask_fn = self.answering(0.8)
+        self.assertEqual(check(self.store, self.judge)["status"], "failed")
+        self.assertEqual(judge_state(self.store, self.judge)[0], "failed")
+
+    def test_a_failure_under_an_earlier_rule_is_checked_again_at_warm_up(self):
+        self.store.set_judge_record(model_key(self.judge.describe()), "failed", {"model": "fake", "wrong": [{"p": 0.659}]})
+        self.assertEqual(judge_state(self.store, self.judge)[0], "stale")
+        self.judge.ask_fn = self.answering(0.659)
+        self.assertEqual(warm(self.store, self.judge)["calibration"], "passed")
+        self.assertEqual(judge_state(self.store, self.judge)[0], "verified")
 
 
 if __name__ == "__main__":

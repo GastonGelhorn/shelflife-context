@@ -504,7 +504,7 @@ def capture(store, judge, turn, triples, deadline=None):
     from .calibration import judge_state
     # Thresholds are measured per model. A judge this scope has not verified yet, after another one was,
     # or one that failed the check, only holds facts for review until the check passes (safe mode).
-    safe = judge_state(store, judge)[0] in {"changed", "failed"}
+    safe = judge_state(store, judge)[0] in {"changed", "failed", "stale"}
     for raw in triples:
         try:
             entity, predicate = key(raw.get("entity"), "entity"), key(raw.get("predicate"), "predicate")

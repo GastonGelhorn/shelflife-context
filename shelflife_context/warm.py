@@ -45,7 +45,7 @@ def warm(store, judge, workspace=None, session=None, learn_repository=False):
             running = record and record["status"] == "running" and \
                 record["checked_at"] > timestamp_offset(store.clock(), -CHECK_STALE_SECONDS)
             result["calibration"] = state
-            if state in {"changed", "unverified"} and not running:
+            if state in {"changed", "unverified", "stale"} and not running:
                 result["calibration"] = check(store, judge)["status"]
         except (JudgeError, KernelError) as exc:
             result["judge"] = str(exc)[:200]
