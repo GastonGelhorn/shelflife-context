@@ -76,6 +76,19 @@ class QuietPacketTests(unittest.TestCase):
         self.assertTrue(packet.get("claims"))
         self.assertEqual([c[1] for c in self.ranked()], ["which pipeline runs the deploy?"])
 
+    def test_a_claim_the_session_holds_is_not_sent_again_until_it_restarts(self):
+        from shelflife_context.adapters import session_start_response
+        first = self.prompt("which pipeline runs the deploy?")
+        self.assertTrue([c for c in first["claims"] if c["entity"] == "deploy"])
+        again = self.prompt("and the deploy pipeline for staging?")
+        self.assertFalse([c for c in again.get("claims", []) if c["entity"] == "deploy"])
+        self.assertIn("delivered_earlier", self.store.trace(self.store.turn("s1", "p2")["projection_id"])["excluded"].values())
+        session_start_response({"cwd": str(self.workspace), "hook_event_name": "SessionStart", "session_id": "s1",
+                                "source": "compact"}, self.workspace, self.store)
+        self.now = timestamp_offset(self.now, 1)
+        after = self.prompt("the deploy pipeline again?")
+        self.assertTrue([c for c in after["claims"] if c["entity"] == "deploy"])
+
     def test_pasted_text_with_a_question_is_still_served(self):
         packet = self.prompt("<pasted_content>\nError: deploy pipeline failed at step 3\n</pasted_content>\nwhy?")
         self.assertTrue(packet.get("claims"))

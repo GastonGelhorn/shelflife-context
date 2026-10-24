@@ -25,6 +25,7 @@ USAGE = """usage: shelflife-context <command>
   serve                                                    the MCP server
   activity --session ID                                    what memory did in the session's last turn (JSON)
   undo ID                                                  take back a fact memory saved
+  report [--days N]                                        what memory cost the sessions of the last N days (7)
   doctor                                                   check Python, the database, jev and the hooks
   setup                                                    choose the judge, the scope and the clients
   memory ARGS...                                           the kernel's owner CLI with this install's db and scope
@@ -139,6 +140,8 @@ def main(argv=None):
         return cli.main(base + ["undo", rest[0]])
     if command == "memory":
         return cli.main(base + rest)
+    if command == "report":
+        return cli.main(base + ["--pretty", "report"] + rest)
     if command == "doctor":
         from .setup import doctor
         return doctor(config, jev, json_output="--json" in rest)

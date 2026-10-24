@@ -213,10 +213,13 @@ def hook_response(event, workspace, store, compiler, strategy="rules", proposals
         and not store.pending_proposal_count()
     pinned, mark = standing_due(store, turn["session_id"])
     selection = "rules" if cold and strategy == "jev" else strategy
+    # A claim this session was already given is still in its context: delivering it again on every prompt
+    # was a third of all deliveries over a week of real prompts, and each one is paid for again.
+    earlier = store.delivered_in_session(turn["session_id"], store.session_field(turn["session_id"], "context_since"))
     if quiet:
         projection = compiler.project(prompt, plan=NeedPlan(strategy=selection), extra={"turn": marker}, pinned=pinned)
     else:
-        projection = compiler.prepare(typed, strategy=selection, extra={"turn": marker}, pinned=pinned)
+        projection = compiler.prepare(typed, strategy=selection, extra={"turn": marker}, pinned=pinned, delivered=earlier)
     store.update_turn(turn["session_id"], turn["turn_key"], projection_id=projection.id,
                       delivered_ids=projection.trace["selected"], gate_count=gate_count, flags=flags)
     # "Ya publicamos la v0.3": something delivered may be over. Asked in plain text after the packet was built,
@@ -416,6 +419,7 @@ def session_start_response(event, workspace, store, client="claude", learn=None,
     store.register_session(session, client, ancestors(depth=2))
     # Started, resumed, cleared or compacted: whatever the session was told before may be gone.
     store.set_session_field(session, "standing_sent", None)
+    store.set_session_field(session, "context_since", store.clock())
     standing = store.standing()
     old = [r for r in store.records(quarantined=True) if r["trust"] != "confirmed" and r["source_kind"] != "repository"
            and (r["entity_key"], r["predicate"]) not in standing

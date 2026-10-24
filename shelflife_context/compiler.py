@@ -93,10 +93,12 @@ class Compiler:
         self.store, self.budget, self.jev = store, budget, jev
         self.deadline, self.allow_remote = deadline, allow_remote
 
-    def project(self, query, strategy="rules", plan=None, as_of=None, extra=None, pinned=()):
+    def project(self, query, strategy="rules", plan=None, as_of=None, extra=None, pinned=(), delivered=()):
         """`extra` holds envelope fields (the turn token, capture instructions) that count toward
         the byte budget and make an otherwise empty packet worth delivering. `pinned` are record ids
-        delivered whatever the question (standing facts the session has not received yet)."""
+        delivered whatever the question (standing facts the session has not received yet). `delivered`
+        are ids the session already holds: they are not sent again for being relevant, only when a
+        changed premise or a review brings them."""
         started = time.perf_counter()
         query = text(query, 16384)
         at = timestamp(as_of) if as_of else self.store.clock()
@@ -164,6 +166,12 @@ class Compiler:
             for record_id in fallback:
                 selected.add(record_id)
                 reasons.setdefault(record_id, "lexical_match")
+        already = {}
+        for record_id in set(delivered) & selected:
+            if reasons.get(record_id) in {"critical_need", "supporting_need", "lexical_match"}:
+                selected.discard(record_id)
+                critical.discard(record_id)
+                already[record_id] = "delivered_earlier"
         visible = {r["id"] for r in records}
         pinned = [i for i in pinned if i in visible]
         for record_id in pinned:
@@ -254,7 +262,7 @@ class Compiler:
 
         # Best first, whole claims only. Critical needs that do not fit are reported, but they no longer
         # empty the packet: five judged-critical pairs over budget used to deliver nothing at all.
-        included, excluded = [], dict(duplicates)
+        included, excluded = [], dict(duplicates) | already
         status = "ok"
         room = self.budget - len(',"critical_budget_overflow"')  # the warning may still have to be added
         for i in ordered:
@@ -324,12 +332,12 @@ class Compiler:
         if snapshot_digest(records, relations, projection.trace["selected"]) != projection.trace["snapshot"]:
             raise KernelError("Context changed before delivery; regenerate the projection.")
 
-    def prepare(self, query, strategy="rules", extra=None, pinned=()):
+    def prepare(self, query, strategy="rules", extra=None, pinned=(), delivered=()):
         """Project, then revalidate right before delivery; one retry reuses the recorded plan so a
         concurrent change costs no second round of judgments."""
         plan = None
         for attempt in range(2):
-            projection = self.project(query, strategy, plan=plan, extra=extra, pinned=pinned)
+            projection = self.project(query, strategy, plan=plan, extra=extra, pinned=pinned, delivered=delivered)
             try:
                 self.revalidate(projection)
                 return projection

@@ -112,6 +112,7 @@ ADDED_COLUMNS = (
     ("sessions", "standing_sent", "TEXT"),
     ("sessions", "notice", "TEXT"),
     ("statements", "cues", "TEXT"),
+    ("sessions", "context_since", "TEXT"),
 )
 # What counts as regret about a capture: taken back, forgotten or revoked within a week, or replaced by the
 # user within the hour. A later change of mind is a change, not a misreading.
@@ -815,13 +816,13 @@ class Store:
                                seen_at=excluded.seen_at""", (self.scope, text(session_id, 256), host, canonical(chain), self.clock()))
 
     def session_field(self, session_id, name):
-        if name not in {"standing_sent", "notice"}:
+        if name not in {"standing_sent", "notice", "context_since"}:
             raise KernelError("Unsupported session field.")
         row = self.db.execute(f"SELECT {name} FROM sessions WHERE scope=? AND session_id=?", (self.scope, session_id)).fetchone()
         return row[0] if row else None
 
     def set_session_field(self, session_id, name, value):
-        if name not in {"standing_sent", "notice"}:
+        if name not in {"standing_sent", "notice", "context_since"}:
             raise KernelError("Unsupported session field.")
         with self.db:
             self.db.execute(f"UPDATE sessions SET {name}=? WHERE scope=? AND session_id=?", (value, self.scope, session_id))
@@ -890,6 +891,12 @@ class Store:
     def turn_by_token(self, token):
         row = self.db.execute("SELECT * FROM turns WHERE scope=? AND token=?", (self.scope, token)).fetchone()
         return self._turn(row)
+
+    def delivered_in_session(self, session_id, since=None):
+        """Record ids already delivered to the session, since `since` (its last start, resume, clear or compaction)."""
+        rows = self.db.execute("SELECT delivered_ids FROM turns WHERE scope=? AND session_id=? AND opened_at>=?",
+                               (self.scope, session_id, since or ""))
+        return {i for (ids,) in rows for i in json.loads(ids)}
 
     def recent_turns(self, session_id, limit=4):
         return [self._turn(r) for r in self.db.execute(

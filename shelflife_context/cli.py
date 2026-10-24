@@ -36,6 +36,11 @@ def parser():
     commands = root.add_subparsers(dest="command", required=True)
     for name in ("init", "status", "proposals", "inventory", "metrics"):
         commands.add_parser(name)
+    report = commands.add_parser("report", help="What memory cost the Claude Code sessions of the last days, and what its packets carried")
+    report.add_argument("--days", type=float, default=7)
+    report.add_argument("--price", action="append", default=[], metavar="MODEL=IN,OUT,READ,WRITE",
+                        help="USD per million tokens for a model id prefix, overriding the built-in list prices")
+    report.add_argument("--transcripts", help="Claude Code's projects folder (default ~/.claude/projects)")
     undo = commands.add_parser("undo", help="Remove a captured statement and restore the version it replaced")
     undo.add_argument("id")
     policy = commands.add_parser("policy", help="Show or change which kinds of facts are captured automatically")
@@ -213,6 +218,18 @@ def execute(args, store):
                 "hint": "memory brief --workspace . --on writes it into AGENTS.md"}
     if command == "undo":
         return store.undo_capture(args.id)
+    if command == "report":
+        from .report import report
+        prices = {}
+        for item in args.price:
+            model, _, values = item.partition("=")
+            try:
+                prices[model.strip()] = tuple(float(v) for v in values.split(","))
+            except ValueError:
+                prices[model.strip()] = ()
+            if len(prices[model.strip()]) != 4 or not model.strip():
+                raise KernelError("A price is MODEL=input,output,cache_read,cache_write in USD per million tokens.")
+        return report(store, args.days, args.transcripts, prices)
     if command == "inventory":
         from .mcp import Server
         return Server(store, parent=[]).inventory()
