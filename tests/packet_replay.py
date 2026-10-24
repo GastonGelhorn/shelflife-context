@@ -6,9 +6,10 @@ cost in judge calls and time, and, with labels, how much of it was relevant.
   python3 -m tests.packet_replay score DIR/before.jsonl [--labels DIR/labels.jsonl]
 
 The prompts are the owner's own words and the store holds their memory: keep both, and the labels, outside
-this repository. `run` refuses the live store; copy it first. jev writes its ledger to a home of its own
-(`DIR/jev-home`), so the owner's figures stay untouched. Labels are lines of
-{"prompt": ID, "claim": ID, "relevant": true|false}."""
+this repository. `run` refuses the live store; copy it first. The copy's turns are cleared, so what a session
+already received is only what the replay sent it. jev writes its ledger to a home of its own (`DIR/jev-home`),
+so the owner's figures stay untouched. Labels are lines of {"prompt": ID, "claim": ID, "relevant": true|false};
+standing facts go to every session by design and are left out of precision."""
 
 import argparse
 import hashlib
@@ -20,9 +21,12 @@ import shutil
 import statistics
 import subprocess
 import sys
+import sqlite3
 import time
 from collections import Counter
 from pathlib import Path
+
+from shelflife_context.turns import typed_text
 
 HOME = Path.home()
 LIVE = HOME / ".shelflife-context" / "memory.sqlite"
@@ -99,6 +103,8 @@ def run(prompts, db, out, scope="work", jev=None, strategy="jev"):
     env.update(JEV_HOME=str(home), PYTHONPATH=str(Path(__file__).resolve().parents[1]))
     env.pop("SHELFLIFE_CONTEXT_OFF", None)
     rows = [json.loads(l) for l in open(prompts, encoding="utf-8")]
+    with sqlite3.connect(db) as copy:  # the real sessions' turns, later ones included, would count as delivered
+        copy.execute("DELETE FROM turns")
     with open(out, "w", encoding="utf-8") as f:
         for n, p in enumerate(rows, 1):
             event = {"hook_event_name": "UserPromptSubmit", "session_id": p["session"], "cwd": p["cwd"], "prompt": p["prompt"]}
@@ -109,7 +115,7 @@ def run(prompts, db, out, scope="work", jev=None, strategy="jev"):
             done = subprocess.run(command, input=json.dumps(event), capture_output=True, text=True, env=env, timeout=60)
             ms = round((time.perf_counter() - started) * 1000)
             calls = [json.loads(l) for l in _ledger_rows(home)[before:]]
-            result = {"id": p["id"], "cwd": p["cwd"], "ms": ms, "judge_calls": len(calls), "judge_ms": sum(c.get("ms", 0) for c in calls),
+            result = {"id": p["id"], "session": p["session"], "cwd": p["cwd"], "ms": ms, "judge_calls": len(calls), "judge_ms": sum(c.get("ms", 0) for c in calls),
                       "prompt": p["prompt"][:200], "claims": [], "warnings": [], "asks": [], "error": None}
             try:
                 context = json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"]
@@ -127,12 +133,12 @@ def run(prompts, db, out, scope="work", jev=None, strategy="jev"):
             print(f"{n}/{len(rows)} {ms} ms · {len(result['claims'])} claims · {len(calls)} judge calls", file=sys.stderr)
 
 
-def typed(prompt):
-    return not prompt.lstrip().startswith("<") and not prompt.startswith("This session is being continued")
-
-
-def score(result, labels=None):
+def score(result, labels=None, prompts=None):
     rows = [json.loads(l) for l in open(result, encoding="utf-8")]
+    full = {p["id"]: p for p in map(json.loads, open(prompts, encoding="utf-8"))} if prompts else {}
+    for r in rows:  # results keep 200 characters of each prompt, which can end before the typed part
+        r.setdefault("session", full.get(r["id"], {}).get("session"))
+        r["typed"] = typed_text(full.get(r["id"], r)["prompt"])
     marks = {}
     if labels:
         for l in open(labels, encoding="utf-8"):
@@ -142,7 +148,7 @@ def score(result, labels=None):
     ok = [r for r in rows if not r["error"]]
     claims = [len(r["claims"]) for r in ok]
     ms = sorted(r["ms"] for r in ok)
-    others = [r for r in ok if not typed(r["prompt"])]
+    others = [r for r in ok if not r["typed"]]
     report = {
         "prompts": len(rows), "errors": len(rows) - len(ok),
         "with_claims": round(sum(1 for c in claims if c) / max(1, len(ok)), 3),
@@ -155,13 +161,20 @@ def score(result, labels=None):
         "warnings": dict(Counter(w for r in ok for w in r["warnings"]).most_common()),
     }
     if marks:
-        delivered = [(r["id"], c["id"]) for r in ok for c in r["claims"]]
+        delivered = [(r["id"], c["id"]) for r in ok for c in r["claims"] if not c["standing"]]
         judged = [d for d in delivered if d in marks]
         relevant = sum(1 for d in judged if marks[d])
         known = {k for k, v in marks.items() if v}
+        # A claim the session got at an earlier prompt is still in its context: covered, not missed.
+        held, covered = {}, 0
+        for r in rows:
+            seen = held.setdefault(r.get("session") or r["id"], set())
+            seen |= {c["id"] for c in r["claims"]}
+            covered += sum(1 for (p, c) in known if p == r["id"] and c in seen)
         report.update({"labelled": len(judged), "unlabelled": len(delivered) - len(judged),
                        "precision": round(relevant / max(1, len(judged)), 3),
-                       "relevant_kept": f"{relevant} of {len(known)}"})
+                       "relevant_kept": f"{relevant} of {len(known)}",
+                       "relevant_in_context": f"{covered} of {len(known)}"})
     print(json.dumps(report, indent=1, ensure_ascii=False))
     return report
 
@@ -183,13 +196,14 @@ def main(argv=None):
     s = sub.add_parser("score")
     s.add_argument("result")
     s.add_argument("--labels")
+    s.add_argument("--prompts", help="the prompts file, for results written before rows carried their session")
     args = parser.parse_args(argv)
     if args.command == "extract":
         extract(args.days, args.sample, args.out)
     elif args.command == "run":
         run(args.prompts, args.db, args.out, args.scope, args.jev, args.strategy)
     else:
-        score(args.result, args.labels)
+        score(args.result, args.labels, args.prompts)
 
 
 if __name__ == "__main__":
