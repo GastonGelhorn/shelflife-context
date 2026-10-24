@@ -12,6 +12,7 @@ import unittest
 from shelflife_context.adapters import configuration, hook_response
 from shelflife_context.common import KernelError, canonical
 from shelflife_context.compiler import Compiler
+from shelflife_context import judge
 from shelflife_context.planner import Jev, jev_candidate, jev_plan
 from shelflife_context.store import Store
 
@@ -44,6 +45,9 @@ if log:
     with open(log, "a") as handle:
         handle.write(json.dumps({"argv": sys.argv[1:], "candidates": candidates, "query": query}) + "\\n")
 mode = os.environ.get("FAKE_JEV_MODE", "score")
+if mode == "hang":
+    import time
+    time.sleep(30)
 if mode == "crash":
     print(json.dumps({"error": "7 questions would take about 14 s on the local model, more than the 10 s this call has", "exit_code": 4}), file=sys.stderr)
     sys.exit(4)
@@ -103,9 +107,13 @@ class JevTests(unittest.TestCase):
         self.assertIn(Jev.QUESTION, call["argv"])
         self.assertEqual(call["query"], "A gift for my friend")
 
+    def leftovers(self):
+        return {p.name for p in Path(tempfile.gettempdir()).glob(judge.QUERY_PREFIX + "*")}
+
     def test_user_text_never_reaches_argv(self):
-        """The prompt goes in a private file named with `@`; candidate values go on stdin. A prompt that
+        """The prompt reaches jev through a pipe named with `@`; candidate values go on stdin. A prompt that
         starts with `@` is judged as written, not read as a path."""
+        before = self.leftovers()
         self.add("allergy", "Secret Nut Canary")
         for prompt in ("A gift for my friend, canary-7781", "@/etc/hosts canary-7781 gift for my friend"):
             self.compiler.project(prompt, strategy="jev")
@@ -119,8 +127,37 @@ class JevTests(unittest.TestCase):
                 self.assertNotIn(secret, argv)
         self.assertEqual(calls[1]["query"], "@/etc/hosts canary-7781 gift for my friend")
         self.assertEqual(calls[2]["query"], reply)
-        leftovers = [p for p in Path(tempfile.gettempdir()).glob("shelflife-context-*")]
-        self.assertEqual(leftovers, [])
+        if judge.QUERY_PIPE:
+            self.assertTrue(all(c["argv"][c["argv"].index("--query") + 1].startswith("@/dev/fd/") for c in calls))
+        self.assertEqual(self.leftovers() - before, set(), "nothing of the user's words is left on disk")
+
+    def test_a_call_cut_short_leaves_nothing_on_disk(self):
+        before = self.leftovers()
+        os.environ["FAKE_JEV_MODE"] = "hang"
+        with self.assertRaises(judge.JudgeError):
+            Jev(str(self.fake), timeout=1).rank("A gift for my friend, canary-7781", ["user allergy: nuts"], no_cache=True)
+        self.assertEqual(self.leftovers() - before, set())
+        self.assertEqual(self.calls()[0]["query"], "A gift for my friend, canary-7781", "jev read the query before it was cut short")
+
+    def test_without_a_pipe_the_file_is_removed_and_old_ones_are_swept(self):
+        root = self.workspace / "tmp"  # never the machine's own temporary folder
+        root.mkdir()
+        stale = Path(tempfile.mkdtemp(prefix=judge.QUERY_PREFIX, dir=root))
+        (stale / "query.txt").write_text("left by a process that was killed")
+        old = __import__("time").time() - judge.STALE_QUERY_SECONDS - 60
+        os.utime(stale, (old, old))
+        fresh = Path(tempfile.mkdtemp(prefix=judge.QUERY_PREFIX, dir=root))  # another call, still running
+        saved = judge.QUERY_PIPE, judge.QUERY_ROOT
+        judge.QUERY_PIPE, judge.QUERY_ROOT = False, str(root)
+        try:
+            self.jev.rank("A gift for my friend", ["user allergy: nuts"], no_cache=True)
+        finally:
+            judge.QUERY_PIPE, judge.QUERY_ROOT = saved
+        self.assertFalse(stale.exists(), "an old folder is swept")
+        self.assertTrue(fresh.exists(), "a recent one may still be in use")
+        self.assertEqual([p.name for p in root.iterdir()], [fresh.name], "the call removed its own")
+        self.assertEqual(self.calls()[0]["query"], "A gift for my friend")
+        self.assertTrue(self.calls()[0]["argv"][-1].startswith("@" + str(root)))
 
     def test_trace_never_copies_values_only_pair_scores(self):
         self.add("allergy", "Nut Canary")

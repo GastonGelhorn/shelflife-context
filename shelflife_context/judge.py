@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 import time
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -122,10 +123,53 @@ def keep_alive(description, duration, timeout=1.0):
         return False
 
 
+# Where a pipe can be named (macOS, Linux), the query reaches jev as `--query @/dev/fd/N` and never touches the disk.
+QUERY_PIPE = os.name == "posix" and os.path.isdir("/dev/fd")
+QUERY_PREFIX = "shelflife-context-"
+QUERY_ROOT = None  # where query folders go on the file route; the system's temporary folder when None
+STALE_QUERY_SECONDS = 600
+
+
+def _feed(fd, data):
+    """Write the query into the pipe jev reads, then close it so jev sees its end."""
+    try:
+        while data:
+            data = data[os.write(fd, data):]
+    except OSError:
+        pass  # jev exited without reading all of it
+    finally:
+        os.close(fd)
+
+
+def _sweep_stale_queries(folder=None):
+    """Query folders a killed process left behind (the file route only), once they are old enough that no call is still
+    reading them. Only this user's, only ours."""
+    root = folder or QUERY_ROOT or tempfile.gettempdir()
+    cutoff = time.time() - STALE_QUERY_SECONDS
+    try:
+        names = [n for n in os.listdir(root) if n.startswith(QUERY_PREFIX)]
+    except OSError:
+        return
+    for name in names:
+        path = os.path.join(root, name)
+        try:
+            info = os.lstat(path)
+            if not os.path.isdir(path) or os.path.islink(path) or info.st_mtime > cutoff:
+                continue
+            if hasattr(os, "getuid") and info.st_uid != os.getuid():
+                continue
+            for entry in os.listdir(path):
+                os.unlink(os.path.join(path, entry))
+            os.rmdir(path)
+        except OSError:
+            continue
+
+
 class JevCommand:
-    """Judge backed by the `jev` CLI. Memory text and the user's words travel on stdin or in a
-    private temporary file, never on argv (visible to every local process) and never as a bare
-    `--query` value, which jev would read as a path when it starts with `@`."""
+    """Judge backed by the `jev` CLI. Memory text and the user's words travel on stdin or through a
+    pipe jev reads as a file (a private temporary file where a pipe cannot be named), never on argv
+    (visible to every local process) and never as a bare `--query` value, which jev would read as a
+    path when it starts with `@`."""
 
     RELEVANCE = "Is `candidate` a fact that someone answering `query` must take into account?"
 
@@ -155,26 +199,19 @@ class JevCommand:
         if limit <= 0:
             raise JudgeError("No time left for the judge in this turn.")
         started = time.perf_counter()
-        folder = None
+        # Tagged as shelflife in jev's ledger, so a session's own figures never count the memory's judging.
+        env = {**os.environ, "JEV_AGENT": "shelflife"}
         try:
-            if query is not None:
-                # `--query @file`: the text never reaches argv, and a prompt such as "@src/app.py fix
-                # this" is sent as written instead of making jev read that file.
-                folder = tempfile.mkdtemp(prefix="shelflife-context-")  # 0700, readable by this user only
-                path = os.path.join(folder, "query.txt")
-                with open(path, "w", encoding="utf-8") as handle:
-                    handle.write(query)
-                argv = [*argv, "--query", "@" + path]
-            # Tagged as shelflife in jev's ledger, so a session's own figures never count the memory's judging.
-            env = {**os.environ, "JEV_AGENT": "shelflife"}
-            process = subprocess.run([self.command, *argv], input=stdin, capture_output=True, text=True, timeout=limit, env=env)
+            # `--query @…`: the text never reaches argv, and a prompt such as "@src/app.py fix this" is sent as
+            # written instead of making jev read that file.
+            if query is None:
+                process = subprocess.run([self.command, *argv], input=stdin, capture_output=True, text=True, timeout=limit, env=env)
+            elif QUERY_PIPE:
+                process = self._run_piped(argv, stdin, query, limit, env)
+            else:
+                process = self._run_with_file(argv, stdin, query, limit, env)
         except (OSError, subprocess.SubprocessError) as exc:
             raise JudgeError("jev is unavailable or timed out.") from exc
-        finally:
-            if folder:
-                for name in os.listdir(folder):
-                    os.unlink(os.path.join(folder, name))
-                os.rmdir(folder)
         if process.returncode != 0:
             # jev's last stderr line is its own error record (backend, budget, key status); it never
             # echoes candidates or state. Bounded so the trace explains the fallback.
@@ -182,6 +219,46 @@ class JevCommand:
             reason = re.sub(r"\s+", " ", detail[-1])[:300] if detail else "no diagnostic output"
             raise JudgeError(f"jev exited with status {process.returncode}: {reason}")
         return parse_json(process.stdout), round((time.perf_counter() - started) * 1000, 3)
+
+    def _run_piped(self, argv, stdin, query, limit, env):
+        """The query through a pipe jev reads as a file: nothing of the user's words is written to disk, so a process
+        killed mid-call (a hook whose time ran out) leaves nothing behind."""
+        read_end, write_end = os.pipe()
+        try:
+            proc = subprocess.Popen([self.command, *argv, "--query", f"@/dev/fd/{read_end}"], stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, pass_fds=(read_end,))
+        except BaseException:
+            os.close(write_end)
+            raise
+        finally:
+            os.close(read_end)
+        writer = threading.Thread(target=_feed, args=(write_end, query.encode("utf-8")), daemon=True)
+        writer.start()
+        try:
+            out, err = proc.communicate(stdin, timeout=limit)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise
+        finally:
+            writer.join(timeout=2)
+        return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+
+    def _run_with_file(self, argv, stdin, query, limit, env):
+        """Where a pipe cannot be named: a private temporary file, removed after the call, and swept by a later call
+        if this process is killed before it can remove it."""
+        _sweep_stale_queries()
+        folder = tempfile.mkdtemp(prefix=QUERY_PREFIX, dir=QUERY_ROOT)  # 0700, readable by this user only
+        try:
+            path = os.path.join(folder, "query.txt")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(query)
+            return subprocess.run([self.command, *argv, "--query", "@" + path], input=stdin, capture_output=True, text=True,
+                                  timeout=limit, env=env)
+        finally:
+            for name in os.listdir(folder):
+                os.unlink(os.path.join(folder, name))
+            os.rmdir(folder)
 
     def describe(self):
         """Where jev would send a request, read from a dry run: nothing is sent."""
