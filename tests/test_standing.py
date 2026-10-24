@@ -86,6 +86,18 @@ class StandingTests(unittest.TestCase):
         self.assertFalse(standing_cue("¿Siempre usamos pnpm?", "pnpm"))
         self.assertFalse(standing_cue("Usa pnpm.", "pnpm"))
 
+    def test_the_items_under_a_rule_heading_are_rules(self):
+        message = ("Three decisions for this codebase, from now on:\n"
+                   "1. Every new feature goes behind a flag, off by default.\n"
+                   "2. Every function that changes an invoice writes an audit entry.\n\n"
+                   "Also, the invoice audit entry format is still under discussion.\n"
+                   "- Add integration tests.")
+        self.assertTrue(standing_cue(message, "new features go behind a flag, off by default"))
+        self.assertTrue(standing_cue(message, "invoice changes write an audit entry"))
+        self.assertFalse(standing_cue(message, "audit entry format under discussion"))
+        self.assertFalse(standing_cue(message, "add integration tests"))
+        self.assertFalse(standing_cue("Two things for this sprint:\n- write audit entries", "write audit entries"))
+
     def test_a_fact_of_the_moment_is_not_a_rule_even_with_never(self):
         self.judge.ask_fn = answers(category="project_state")
         result = self.say("Nunca hemos tenido un incidente en producción.", "s1", ("acme", "incidents", "none in production"))

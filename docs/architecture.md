@@ -103,7 +103,7 @@ Automatic key resolution never targets a repository fact; only an explicit `repl
 
 ## Standing facts
 
-Each statement or restatement the user typed, once validated, is logged under its property. When the property has been stated in three different sessions since it was last forgotten, it becomes standing. A preference, constraint or decision becomes standing at once when its sentence contains a rule word (always, never, from now on, in every…). `memory_standing` turns one on or off when the user's own words ask for it, and counting never overrides an off.
+Each statement or restatement the user typed, once validated, is logged under its property. When the property has been stated in three different sessions since it was last forgotten, it becomes standing. A preference, constraint or decision becomes standing at once when its sentence contains a rule word (always, never, from now on, in every…), or when it is an item of a list whose heading does ("Three decisions, from now on:" over "1. … 2. …"). `memory_standing` turns one on or off when the user's own words ask for it, and counting never overrides an off.
 
 The prompt hook pins standing facts into the packet, at most 8, whenever the session has not yet received the current set. That happens on the session's first prompt, after SessionStart (start, resume, clear or compact), and after a value changes. Pinned claims carry `standing: true`. Standing facts are exempt from the 180-day cutoff and from the 90-day digest.
 

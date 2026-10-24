@@ -629,19 +629,36 @@ def _capture_one(store, judge, turn, proposed, rules, deadline, replaces=None, q
     return _standing(store, turn, result, value, category) if status == "captured" else result
 
 
+_LIST_ITEM = re.compile(r"\s*(\d{1,2}[.)]|[-*•])\s+")
+
+
 def standing_cue(authored, value):
-    """The clause stating the value says it is a rule ("never", "from now on", "in every repo")."""
+    """The clause stating the value says it is a rule ("never", "from now on", "in every repo"), or the
+    value is an item of a list whose heading does ("Three decisions, from now on:" over "1. … 2. …")."""
     rendered = value if isinstance(value, str) else canonical(value)
     wanted = [t for t in re.findall(r"[^\W_]+", fold(rendered)) if len(t) >= 4]
     if not wanted:
         return False
+
+    def states(folded):
+        words = re.findall(r"[^\W_]+", folded)
+        return sum(1 for t in wanted if any(_near(t, w) for w in words)) >= max(1, (len(wanted) + 1) // 2)
+
     for clause in re.split(r"(?<=[.!?\n])\s+", authored):
         folded = fold(clause)
-        if "?" in folded or not _STANDING_CUES.search(folded):
-            continue
-        words = re.findall(r"[^\W_]+", folded)
-        if sum(1 for t in wanted if any(_near(t, w) for w in words)) >= max(1, (len(wanted) + 1) // 2):
+        if "?" not in folded and _STANDING_CUES.search(folded) and states(folded):
             return True
+    heading = False
+    for line in authored.splitlines():
+        folded = fold(line)
+        if not folded.strip():
+            heading = False  # a blank line ends the list
+        elif _LIST_ITEM.match(line):
+            if heading and states(folded):
+                return True
+        else:
+            cue = _STANDING_CUES.search(folded)
+            heading = bool(cue) and "?" not in folded and ":" in folded[cue.end():]
     return False
 
 
