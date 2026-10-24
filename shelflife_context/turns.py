@@ -17,6 +17,14 @@ EXCERPT_BYTES = 4096
 EXCERPT_SECONDS = 600      # captures can still be validated against a turn for ten minutes
 CONTINUATION_SECONDS = 2   # a prompt this soon after the previous Stop was not typed by a person
 
+# What the host writes into a prompt and nobody typed: a background task's notice, a reminder, a local
+# command and its output, the summary that opens a compacted conversation. A slash command's arguments
+# were typed, so only its tags go.
+_HOST_BLOCK = re.compile(r"<(task-notification|system-reminder|local-command-(?:stdout|stderr|caveat)|bash-(?:input|stdout|stderr)|"
+                         r"command-(?:name|message))>.*?(</\1>|$)", re.S)
+_HOST_TAG = re.compile(r"</?command-args>")
+CONTINUED = "This session is being continued from a previous conversation"
+
 _SECRETS = [
     re.compile(r"(?i)\b(api[_ -]?key|password|passwd|secret[_ -]?token|access[_ -]?token|bearer)\b\s*[:=]?\s*\S+"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(-----END [A-Z ]*PRIVATE KEY-----|$)", re.S),
@@ -58,6 +66,14 @@ def mask_secrets(value):
 def excerpt(prompt):
     data = mask_secrets(prompt).encode()[:EXCERPT_BYTES]
     return data.decode(errors="ignore")
+
+
+def typed_text(prompt):
+    """The prompt without what the host wrote into it: empty when nobody typed any of it. Pasted text stays,
+    since the person chose to send it."""
+    if prompt.lstrip().startswith(CONTINUED):
+        return ""
+    return _HOST_TAG.sub("", _HOST_BLOCK.sub("", prompt)).strip()
 
 
 def do_not_remember(prompt):
@@ -111,7 +127,7 @@ def origin(event, prompt, previous):
     the previous Stop within seconds was not typed by a person; host markup is of unknown authorship."""
     if event.get("is_continuation") or event.get("stop_hook_active"):
         return "continuation"
-    if prompt.lstrip().startswith("<"):
+    if prompt.lstrip().startswith("<") or not typed_text(prompt):
         return "unknown"
     if previous and previous.get("closed_at"):
         opened = event.get("_now")

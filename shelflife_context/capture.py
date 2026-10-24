@@ -13,7 +13,7 @@ import re
 from .common import KernelError, canonical, key, reject_secrets
 from .judge import JudgeError
 from .language import fold, period_end, query_terms
-from .turns import do_not_remember
+from .turns import do_not_remember, typed_text
 
 
 NONE_BAR = 0.15
@@ -130,7 +130,9 @@ def segments(prompt):
     """(authored, quoted): text the user wrote in this message, and pasted or quoted material.
 
     Fenced blocks, quoted lines, mail headers and everything after a reply marker, log/JSON/URL
-    lines are quoted. A decision typed after a pasted log stays authored."""
+    lines are quoted. A decision typed after a pasted log stays authored. What the host wrote into the
+    prompt (turns.typed_text) is neither."""
+    prompt = typed_text(prompt)
     quoted = [block.group(0) for block in _FENCE.finditer(prompt)]
     kept = []
     body = _FENCE.sub("\n", prompt)

@@ -17,7 +17,7 @@ from .language import fold
 from .planner import NeedPlan, generic_question
 from .protocol import parse_json
 from . import repository
-from .turns import (choice_reply, close_turn, do_not_remember, done_statement, forget_request, open_turn,
+from .turns import (choice_reply, close_turn, do_not_remember, done_statement, forget_request, open_turn, typed_text,
                     trivial_continuation, undo_request)
 
 
@@ -148,7 +148,8 @@ def hook_response(event, workspace, store, compiler, strategy="rules", proposals
     # Requests are read from what the user typed in this turn: pasted text or tool output that
     # mentions "forget" is not a request, and only a typed turn can ask for a deletion at all.
     authored = segments(prompt)[0]
-    if do_not_remember(prompt):
+    typed = typed_text(prompt)
+    if do_not_remember(typed):
         flags.append("do_not_remember")
         marker["capture"] = "off: the user asked not to keep this message"
     if turn["origin"] == "interactive" and (forget_request(authored) or undo_request(authored)):
@@ -197,15 +198,16 @@ def hook_response(event, workspace, store, compiler, strategy="rules", proposals
                     marker["capture"]["related"] = related
         except KernelError:
             flags.append("gate_unavailable")
-    # Pending captures ride along in the marker; they do not justify judging an "ok" for relevance.
-    quiet = (trivial_continuation(prompt) or choice_reply(prompt)) and not [f for f in flags if f != "judge_cold"] \
+    # Pending captures ride along in the marker; they do not justify judging an "ok" for relevance. Nor does
+    # text nobody typed: a background task's notice matched a week of unrelated facts by its words alone.
+    quiet = (not typed or trivial_continuation(prompt) or choice_reply(prompt)) and not [f for f in flags if f != "judge_cold"] \
         and not store.pending_proposal_count()
     pinned, mark = standing_due(store, turn["session_id"])
     selection = "rules" if cold and strategy == "jev" else strategy
     if quiet:
         projection = compiler.project(prompt, plan=NeedPlan(strategy=selection), extra={"turn": marker}, pinned=pinned)
     else:
-        projection = compiler.prepare(prompt, strategy=selection, extra={"turn": marker}, pinned=pinned)
+        projection = compiler.prepare(typed, strategy=selection, extra={"turn": marker}, pinned=pinned)
     store.update_turn(turn["session_id"], turn["turn_key"], projection_id=projection.id,
                       delivered_ids=projection.trace["selected"], gate_count=gate_count, flags=flags)
     # "Ya publicamos la v0.3": something delivered may be over. Asked in plain text after the packet was built,
