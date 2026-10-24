@@ -87,6 +87,19 @@ def jev_home(base):
     return home
 
 
+def jevmate_server():
+    """The installed jevmate plugin's MCP server, named as Claude Code names a plugin's server, so its tools keep
+    the names the plugin gives them: --strict-mcp-config, which keeps the user's own servers out, drops it too."""
+    installed = json.loads((Path.home() / ".claude" / "plugins" / "installed_plugins.json").read_text())
+    entry = next(e for e in installed.get("plugins", installed)["jevmate@gastongelhorn"] if e.get("scope") == "user")
+    root = entry["installPath"]
+    servers = json.loads((Path(root) / ".mcp.json").read_text())["mcpServers"]
+    expand = lambda value: value.replace("${CLAUDE_PLUGIN_ROOT}", root)  # noqa: E731
+    return {"plugin_jevmate_" + name: {**config, "args": [expand(a) for a in config.get("args", [])],
+                                       "env": {**config.get("env", {}), "CLAUDE_PLUGIN_ROOT": root}}
+            for name, config in servers.items()}
+
+
 def ledger(home):
     try:
         return [json.loads(line) for line in (home / "usage.jsonl").read_text().splitlines() if line.strip()]
@@ -114,6 +127,8 @@ def prepare(root, variant, jev_command):
                     hook["command"] = timed(hook["command"], hook_log, event)
         settings["hooks"] = hooks
         mcp = configuration("claude", root, database, "pilot", mode="mcp", strategy="jev", jev_command=jev_command)["config"]
+    if spec["jevmate"]:
+        mcp["mcpServers"].update(jevmate_server())
     (root / ".claude").mkdir(exist_ok=True)
     (root / ".claude" / "settings.local.json").write_text(json.dumps(settings, indent=2))
     (root / ".git" / "info" / "exclude").write_text(".claude/\n")  # the wiring is not the agent's work
@@ -219,10 +234,28 @@ def run_variant(claude, base, variant, model, jev_command, home, max_turns, sess
             # The SessionStart hook only starts the repository pass; later sessions should see its result.
             signature = wait_for_pass(database, root, previous=signature, seconds=90) or signature
         steps.append(result)
+        if result.get("is_error") and not any(result.get("tokens", {}).values()):
+            # Nothing reached the model (sign-in, quota): every later session would fail the same way.
+            raise Unusable(result.get("answer") or result.get("stderr") or "the session failed before any request")
         print(f"  {stage}: ${result.get('cost_usd') or 0:.3f} · {result.get('num_turns')} turns · {result['seconds']} s · "
               f"{sum(result['probe']['checks'].values())}/{len(result['probe']['checks'])} checks", file=sys.stderr, flush=True)
     hooks = [json.loads(line) for line in hook_log.read_text().splitlines()] if hook_log.exists() else []
     return {"variant": variant, "steps": steps, "hook_ms": hooks, "kernel": kernel_summary(database) if database else None}
+
+
+class Unusable(Exception):
+    pass
+
+
+def preflight(claude, model, env):
+    """One small request, so an expired sign-in stops the bench before twelve sessions report it."""
+    done = subprocess.run([claude, "-p", "Reply with ok.", "--output-format", "json", "--model", model],
+                          stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=180, env=env)
+    try:
+        result = json.loads(done.stdout)
+    except ValueError:
+        return (done.stderr or done.stdout or "no answer").strip()[-300:]
+    return result.get("result") if result.get("is_error") else None
 
 
 def spread(values):
@@ -283,7 +316,8 @@ def markdown(report):
     for variant, row in report["summary"].items():
         cells = [f"${row[s]['cost_usd']['mean']:.3f} ({row[s]['cost_usd']['min']:.3f}–{row[s]['cost_usd']['max']:.3f})" for s in sessions]
         chain = row["chain"]
-        saving = "–" if variant == "none" else f"{chain['saving_vs_none']:+.0%}" + (" (noise)" if chain["within_noise"] else "")
+        saving = "–" if variant == "none" or chain.get("saving_vs_none") is None else \
+            f"{chain['saving_vs_none']:+.0%}" + (" (noise)" if chain["within_noise"] else "")
         lines.append(f"| {variant} | " + " | ".join(cells) + f" | ${chain['cost_usd']['mean']:.3f} | {saving} | "
                      f"{chain['checks_passed']} | {row.get('s2', {}).get('decisions_applied') or '–'} |")
     lines += ["", "Cost per session: mean (min–max) over repetitions. A saving is marked noise when the spread of "
@@ -314,6 +348,10 @@ def main():
         return 1
     base.mkdir(parents=True, exist_ok=True)
     home = jev_home(base)
+    problem = preflight(args.claude, args.model, environment(home))
+    if problem:
+        print(canonical({"error": "Claude Code cannot make a request: " + problem}))
+        return 1
     report = {"client": subprocess.run([args.claude, "--version"], capture_output=True, text=True).stdout.strip(),
               "model": args.model, "sessions": args.sessions, "started": time.strftime("%Y-%m-%d %H:%M"), "runs": []}
     out = base / "report.json"
@@ -323,8 +361,13 @@ def main():
         rng.shuffle(order)  # interleave so drift in API or local-model latency does not favour one variant
         for variant in order:
             print(f"[{time.strftime('%H:%M:%S')}] rep {repetition + 1} · {variant}", file=sys.stderr, flush=True)
-            run = run_variant(args.claude, base / f"rep{repetition + 1}", variant, args.model, args.jev_command, home,
-                              args.max_turns, args.sessions)
+            try:
+                run = run_variant(args.claude, base / f"rep{repetition + 1}", variant, args.model, args.jev_command, home,
+                                  args.max_turns, args.sessions)
+            except Unusable as exc:
+                out.write_text(json.dumps(report, ensure_ascii=False, indent=2))
+                print(canonical({"error": f"Stopped at rep {repetition + 1} · {variant}: {exc}"}))
+                return 1
             run["repetition"] = repetition + 1
             report["runs"].append(run)
             out.write_text(json.dumps(report, ensure_ascii=False, indent=2))
