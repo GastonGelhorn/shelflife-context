@@ -169,6 +169,7 @@ Day to day you just talk. The CLI is there when you want to see what's going on:
 memory --pretty inventory          # everything held, by entity, with trust and category
 memory --pretty traces --limit 3   # what each prompt delivered and why (no values, only ids and scores)
 memory --pretty metrics            # how often you took back what was saved, hook latency, outcomes by reason
+memory --pretty report --days 7    # what memory cost your Claude Code sessions this week, read from their transcripts
 memory --pretty calibrate --check  # does the current jev model still pass the canary with these thresholds?
 memory policy --enable personal_attributes
 memory undo STATEMENT_ID

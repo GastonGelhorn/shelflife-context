@@ -10,6 +10,7 @@ Every number in the README comes from one of these scripts. They need a checkout
 | `python3 -m tests.relevance_check` | selection on 60 labelled questions over 122 facts | jev (or `--scores fixtures/relevance_scores.json`) |
 | `python3 -m tests.holdout_check` | the whole capture path on 38 held-out messages | jev |
 | `python3 -m tests.growth_check` | an old constraint asked about in other words, as memory grows | jev |
+| `python3 -m tests.packet_replay` | your own recent prompts through the prompt hook, against a copy of your store: claims per packet, judge calls, hook time and, with labels, precision | jev, your transcripts |
 | `python3 -m tests.compat_matrix` | end to end in the real clients, with their versions recorded | Claude Code (and a trusted Codex pilot) |
 
 The latest results, and the failures behind them, are in [verification](verification.md#the-benchmark). In short, with the local judge and the hook's real budget: 193 of 211 checks with an empty memory, 186 with 200 unrelated facts, 179 with 1,000.

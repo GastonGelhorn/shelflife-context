@@ -1,14 +1,22 @@
 """v0.11: a packet carries what helps the prompt it rides on, and nothing on text nobody typed."""
 
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+import io
+import json
+import os
 import tempfile
+import time
 import unittest
+
+from shelflife_context import cli
 
 from shelflife_context.adapters import hook_response, packet_of, stop_response
 from shelflife_context.capture import segments
 from shelflife_context.common import canonical, timestamp, timestamp_offset
 from shelflife_context.compiler import READER_RULES, Compiler
 from shelflife_context.mcp import INSTRUCTIONS, Server
+from shelflife_context.report import transcripts
 from shelflife_context.store import Store
 from shelflife_context.turns import typed_text
 from tests.fakes import FakeJudge, answers
@@ -225,3 +233,65 @@ class CaptureCostTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReportTests(unittest.TestCase):
+    """What a week of transcripts says memory cost: packets cached and re-read, memory-only requests, Stop hand-backs."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name) / "projects"
+        (self.root / "repo").mkdir(parents=True)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def call(self, n, usage, tools=(), sidechain=False):
+        content = [{"type": "tool_use", "name": name} for name in tools] or [{"type": "text", "text": "ok"}]
+        return {"type": "assistant", "isSidechain": sidechain,
+                "message": {"id": f"m{n}", "model": "claude-sonnet-5-5", "usage": usage, "content": content}}
+
+    def write(self, name, entries):
+        path = self.root / "repo" / name
+        path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+        return path
+
+    def test_three_costs_priced_at_the_session_model(self):
+        body = "Shelflife " + "x" * 339_990  # 340,002 chars once quoted, about 100,000 tokens
+        self.write("s1.jsonl", [
+            {"type": "user", "message": {"content": "deploy staging"}},
+            {"type": "attachment", "attachment": {"type": "hook_additional_context", "hookName": "UserPromptSubmit", "content": body}},
+            self.call(1, {"input_tokens": 10}),
+            self.call(2, {"input_tokens": 1_000_000}, ["mcp__plugin_shelflife-context_shelflife-context__memory_capture"]),
+            self.call(9, {"input_tokens": 5_000_000}, sidechain=True),
+            {"type": "attachment", "attachment": {"type": "hook_blocking_error", "hookEvent": "Stop", "content": "Shelflife: save it first"}},
+            self.call(3, {"output_tokens": 100_000}),
+            {"type": "user", "message": {"content": "thanks"}},
+            self.call(4, {"cache_read_input_tokens": 1_000_000}),
+        ])
+        self.write("s2.jsonl", [{"type": "user", "message": {"content": "hi"}}, self.call(5, {"input_tokens": 500_000})])
+        old = self.write("s3.jsonl", [self.call(6, {"input_tokens": 9_000_000})])
+        os.utime(old, (time.time() - 10 * 86400,) * 2)
+        result = transcripts(7, self.root)
+        self.assertEqual((result["sessions"], result["requests"], result["sessions_with_shelflife"]), (2, 5, 1))
+        self.assertEqual(result["sessions_usd"], 4.2)  # 2 + 1 + 0.2 in s1, 1 in s2; the sidechain and the old session left out
+        self.assertEqual(result["packets"], {"count": 1, "tokens_each": 100001, "usd": 0.33})  # written once, re-read by 4 requests
+        self.assertEqual(result["tools"], {"requests": 1, "usd": 2.0, "calls": {"memory_capture": 1}})
+        self.assertEqual(result["stops"], {"handed_back": 1, "requests": 1, "usd": 1.0})
+        self.assertEqual(result["shelflife_usd"], 3.33)
+        self.assertEqual(result["share_of_their_sessions"], 1.0406)  # of s1's 3.20: the fixture's usage leaves the packet out
+
+    def test_a_price_can_be_given_and_a_bad_one_is_refused(self):
+        self.write("s1.jsonl", [self.call(1, {"input_tokens": 1_000_000})])
+        db = str(Path(self.temp.name) / "memory.sqlite")
+        Store(db, scope="work", create=True).close()
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = cli.main(["--db", db, "--scope", "work", "report", "--transcripts", str(self.root),
+                             "--price", "claude-sonnet-5-5=1,5,0.1,1.25"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.getvalue())["cost"]["sessions_usd"], 1.0)
+        self.assertEqual(json.loads(out.getvalue())["selection"], {"packets": 0})
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(cli.main(["--db", db, "--scope", "work", "report", "--price", "sonnet=1,2"]), 1)
+        self.assertIn("MODEL=input,output", err.getvalue())
