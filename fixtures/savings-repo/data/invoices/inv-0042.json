@@ -1,0 +1,15 @@
+{
+  "currency": "EUR",
+  "customer_id": "c-brava",
+  "due_on": "2026-10-14",
+  "id": "inv-0042",
+  "issued_on": "2026-09-14",
+  "lines": [
+    {"description": "Consulting hours", "discount_bp": 0, "quantity": 12, "tax_rate_bp": 2100, "unit_cents": 8500},
+    {"description": "Travel, Valencia", "discount_bp": 0, "quantity": 1, "tax_rate_bp": 2100, "unit_cents": 23450},
+    {"description": "Software licence", "discount_bp": 1000, "quantity": 3, "tax_rate_bp": 2100, "unit_cents": 4999}
+  ],
+  "notes": "Project 2026-Q3",
+  "number": "INV-2026-0042",
+  "status": "finalized"
+}

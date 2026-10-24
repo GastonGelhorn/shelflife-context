@@ -1,0 +1,5 @@
+{
+  "c-acme": {"country": "IE", "email": "accounts@acme.example", "id": "c-acme", "name": "Acme Fabrication Ltd", "vat_number": "IE6388047V"},
+  "c-brava": {"country": "ES", "email": "facturas@brava.example", "id": "c-brava", "name": "Brava Estudio SL", "vat_number": "ESB12345674"},
+  "c-lumen": {"country": "FR", "email": "compta@lumen.example", "id": "c-lumen", "name": "Lumen Conseil SARL", "vat_number": ""}
+}

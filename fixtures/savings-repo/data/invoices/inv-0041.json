@@ -1,0 +1,14 @@
+{
+  "currency": "EUR",
+  "customer_id": "c-acme",
+  "due_on": "2026-10-09",
+  "id": "inv-0041",
+  "issued_on": "2026-09-09",
+  "lines": [
+    {"description": "Laser cutting, batch 7", "discount_bp": 0, "quantity": 1, "tax_rate_bp": 2300, "unit_cents": 180000},
+    {"description": "Delivery", "discount_bp": 0, "quantity": 1, "tax_rate_bp": 2300, "unit_cents": 4500}
+  ],
+  "notes": "",
+  "number": "INV-2026-0041",
+  "status": "finalized"
+}

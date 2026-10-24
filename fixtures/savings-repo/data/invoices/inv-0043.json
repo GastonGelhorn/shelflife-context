@@ -1,0 +1,13 @@
+{
+  "currency": "EUR",
+  "customer_id": "c-lumen",
+  "due_on": "",
+  "id": "inv-0043",
+  "issued_on": "",
+  "lines": [
+    {"description": "Workshop, two days", "discount_bp": 0, "quantity": 2, "tax_rate_bp": 2000, "unit_cents": 95000}
+  ],
+  "notes": "",
+  "number": "",
+  "status": "draft"
+}
