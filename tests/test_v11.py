@@ -4,13 +4,16 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from shelflife_context.adapters import hook_response, packet_of
+from shelflife_context.adapters import hook_response, packet_of, stop_response
 from shelflife_context.capture import segments
 from shelflife_context.common import canonical, timestamp, timestamp_offset
-from shelflife_context.compiler import Compiler
+from shelflife_context.compiler import READER_RULES, Compiler
+from shelflife_context.mcp import INSTRUCTIONS, Server
 from shelflife_context.store import Store
 from shelflife_context.turns import typed_text
-from tests.fakes import FakeJudge
+from tests.fakes import FakeJudge, answers
+
+HOST = [4242, "Sat Oct 24 12:00:00 2026"]
 
 
 class TypedTextTests(unittest.TestCase):
@@ -106,6 +109,87 @@ class FallbackTests(unittest.TestCase):
             self.add("deploy", predicate, "x")
         projection = self.compiler.project("how do we deploy?", strategy="jev")
         self.assertEqual(len(projection.trace["selected"]), 2)
+
+
+class CaptureCostTests(unittest.TestCase):
+    """Asking for a capture costs requests: ask only when sure, never hand the turn back unasked, re-ask once."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.temp.name)
+        self.now = "2026-10-24T12:00:00+00:00"
+        self.store = Store(self.workspace / "memory.sqlite", clock=lambda: timestamp(self.now), create=True)
+        self.judge = FakeJudge()
+        self.compiler = Compiler(self.store)
+        self.turns = 0
+
+    def tearDown(self):
+        self.store.close()
+        self.temp.cleanup()
+
+    def prompt(self, text):
+        self.now = timestamp_offset(self.now, 60)
+        self.turns += 1
+        event = {"cwd": str(self.workspace), "prompt": text, "session_id": "s1", "prompt_id": f"p{self.turns}"}
+        response, _ = hook_response(event, self.workspace, self.store, self.compiler, judge=self.judge)
+        self.store.register_session("s1", "claude", [HOST])
+        return response["hookSpecificOutput"]["additionalContext"], event
+
+    def stop(self, event):
+        self.now = timestamp_offset(self.now, 2)
+        return stop_response({"cwd": str(self.workspace), "hook_event_name": "Stop", "session_id": "s1",
+                              "prompt_id": event["prompt_id"], "last_assistant_message": "Ok."}, self.workspace, self.store, self.judge)
+
+    def tools_running(self):
+        server = Server(self.store, self.compiler, judge=self.judge, parent=HOST)
+        server.dispatch({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {}}})
+        server.dispatch({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        server.dispatch({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "memory_status", "arguments": {}}})
+
+    def test_the_turn_is_not_handed_back_unless_the_owner_asks(self):
+        self.tools_running()
+        context, event = self.prompt("Mi manager es Dani")
+        self.assertIn("memory_capture", context)
+        self.assertNotIn("decision", self.stop(event))
+        self.store.set_policy({"stop_nudge": True})
+        _, event = self.prompt("El deadline es el viernes")
+        self.assertEqual(self.stop(event)["decision"], "block")
+
+    def test_an_unsure_count_asks_for_nothing(self):
+        def unsure(qid, state, spec):
+            if qid == "count":
+                return {"none": 0.1, "one": 0.9, "two": 0.0, "several": 0.0}
+            return answers()(qid, state, spec)
+        self.judge.ask_fn = unsure
+        context, event = self.prompt("Creo que Dani lleva el proyecto")
+        self.assertNotIn("memory_capture", context)
+        turn = self.store.turn("s1", event["prompt_id"])
+        self.assertEqual(turn["gate_count"], 0)
+        self.assertIn("gate_unsure", turn["flags"])
+
+    def test_the_request_rides_along_another_tool_call(self):
+        context, _ = self.prompt("Mi manager es Dani")
+        self.assertIn("in the same message as your first other tool call", context)
+
+    def test_no_more_facts_are_asked_for_than_the_caps_allow(self):
+        self.judge.ask_fn = answers(count="several")
+        self.store.set_policy({"caps": {"turn": 2, "session": 10, "day": 30}})
+        context, event = self.prompt("Mi manager es Dani, el deadline es el viernes y usamos pnpm")
+        self.assertEqual(packet_of(context)["turn"]["capture"]["facts_stated"], 2)
+        self.store.set_policy({"caps": {"turn": 2, "session": 0, "day": 30}})
+        context, event = self.prompt("El staging se llama checkout-stg")
+        self.assertNotIn("capture", packet_of(context)["turn"])
+        self.assertIn("gate_capped", self.store.turn("s1", event["prompt_id"])["flags"])
+
+    def test_an_unsaved_fact_is_offered_again_once(self):
+        self.prompt("Mi manager es Dani")
+        self.assertEqual(packet_of(self.prompt("ok")[0])["turn"]["pending"][0]["facts_not_captured"], 1)
+        self.assertNotIn("pending", packet_of(self.prompt("sigue")[0])["turn"])
+
+    def test_captured_claims_are_described_as_what_they_are(self):
+        self.assertFalse([r for r in READER_RULES if "kernel's reading" in r])
+        self.assertNotIn("readings", INSTRUCTIONS)
 
 
 if __name__ == "__main__":

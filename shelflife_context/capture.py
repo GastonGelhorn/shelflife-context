@@ -44,6 +44,10 @@ DEFAULT_POLICY = {
     "repository_commits": False,
     # How long the local judge's model stays loaded after each turn ("off" leaves Ollama's default).
     "keep_alive": "30m",
+    # Hand the turn back at Stop when a confidently stated fact was not saved. Each hand-back is at least two
+    # more requests over the whole conversation (46 of them cost $20 in a week of real use), so it is off
+    # unless the owner turns it on.
+    "stop_nudge": False,
 }
 # A property the user has stated in this many separate sessions is delivered at the start of every
 # session from then on, whether or not a question touches it: they should not have to say it again.
@@ -322,6 +326,12 @@ def evidence_sentence(authored, triple):
     terms = set(query_terms(fact_line(*triple)))
     best = max(sentences, key=lambda s: len(terms & set(query_terms(s))))
     return best[:300]
+
+
+def caps_left(store, turn):
+    """How many more captures the caps allow in this turn (capture.policy caps: turn, session, day)."""
+    counts, caps = store.capture_counts(turn["session_id"], turn["turn_key"]), policy(store)["caps"]
+    return max(0, min(caps[name] - counts[name] for name in ("turn", "session", "day")))
 
 
 def gate(judge, prompt, deadline=None, none_bar=None):

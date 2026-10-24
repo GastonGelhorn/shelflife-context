@@ -347,13 +347,14 @@ class AutonomyTests(unittest.TestCase):
         self.assertIn("saved user.manager", receipt)
         self.assertNotIn("not saved", receipt)  # the count is an estimate: no nagging once something was saved
         packet, _ = self.prompt("ok")
-        self.assertEqual(packet["turn"]["pending"][0]["facts_not_captured"], 1)
+        self.assertNotIn("pending", packet["turn"])  # a capture was attempted for that message: not asked again
         self.assertEqual(packet["claims"], [])
         self.tick(700)
         self.prompt("otra cosa")
         self.assertIn({"outcome": "missed", "reason": "excerpt_expired", "count": 1}, self.store.capture_metrics())
 
     def test_nothing_saved_is_reported_and_generic_questions_skip_the_gate(self):
+        self.store.set_policy({"stop_nudge": True})
         self.server()  # the memory tools are running for this host process
         packet, event = self.prompt("Mi manager es Dani")
         nudge = self.stop(event, "Ok.")

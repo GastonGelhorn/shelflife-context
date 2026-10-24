@@ -45,6 +45,8 @@ def parser():
     policy.add_argument("--auto-capture", choices=("on", "off"))
     policy.add_argument("--repository", choices=("on", "off"), help="Read decision records of the session's repository")
     policy.add_argument("--repository-commits", choices=("on", "off"), help="Also read decisions from commit messages (off by default)")
+    policy.add_argument("--stop-nudge", choices=("on", "off"),
+                        help="Hand the turn back at Stop when a stated fact was not saved (off by default: two or more requests each)")
     policy.add_argument("--keep-alive", help="How long the local judge's model stays loaded after a turn, e.g. 30m; off for Ollama's default")
     policy.add_argument("--threshold", action="append", default=[], help="name=value, e.g. affirmed=0.72 after jev tune")
     calibrate = commands.add_parser("calibrate", help="Check the judge against the thresholds, or export labelled fixtures for `jev tune`")
@@ -248,6 +250,8 @@ def execute(args, store):
             stored["repository"] = args.repository == "on"
         if args.repository_commits:
             stored["repository_commits"] = args.repository_commits == "on"
+        if args.stop_nudge:
+            stored["stop_nudge"] = args.stop_nudge == "on"
         if args.keep_alive:
             if not re.fullmatch(r"(off|0|\d{1,4}[smh])", args.keep_alive):
                 raise KernelError("keep-alive is a duration such as 30m or 2h, or off.")
@@ -258,7 +262,7 @@ def execute(args, store):
                 raise KernelError("Thresholds: affirmed, uncertain, none_bar, sarcasm, past, task or unprompted, between 0 and 1.")
             stored["thresholds"] = dict(stored.get("thresholds", {}), **{name: float(value)})
         if args.enable or args.disable or args.allow_remote_judge or args.auto_capture or args.threshold or args.repository \
-                or args.repository_commits or args.keep_alive:
+                or args.repository_commits or args.keep_alive or args.stop_nudge:
             store.set_policy(stored)
             if args.threshold:
                 # Verdicts were about the old thresholds; the next session's warm-up checks the new ones.

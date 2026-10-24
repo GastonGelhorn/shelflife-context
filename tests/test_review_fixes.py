@@ -152,6 +152,7 @@ class ReviewFixTests(unittest.TestCase):
         from shelflife_context.inference import RESTS_ON
         self.judge.ask_fn = answers(category="constraints")
         self.judge.rank_fn = lambda query, line, question: 0.9 if question == RESTS_ON else 0.1
+        self.store.set_policy({"stop_nudge": True})
         self.tool("memory_status", {})  # a memory server is running under this host
         token = packet_of(self.prompt("We have three months to deliver checkout. Should we rewrite it?"))["turn"]["token"]
         reply = "No: with three months, refactor the payment module incrementally instead of rewriting it."

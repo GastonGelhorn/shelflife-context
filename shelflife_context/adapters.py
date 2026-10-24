@@ -8,7 +8,7 @@ import shutil
 import sys
 
 from .binding import ancestors
-from .capture import (CONFIDENT_NONE, STANDING_LIMIT, describe_results, gate, only_questions, policy as capture_policy,
+from .capture import (CONFIDENT_NONE, STANDING_LIMIT, caps_left, describe_results, gate, only_questions, policy as capture_policy,
                       related_facts, segments)
 from .turns import mask_secrets
 from .common import KernelError, canonical, digest, text, timestamp_offset
@@ -78,13 +78,16 @@ def _check_event(event, workspace, expected):
 
 def _pending_captures(store, turn):
     """Earlier turns of this session whose stated facts were not all captured and whose excerpt
-    can still validate a late capture."""
+    can still validate a late capture. Each is offered once, and never after a capture was attempted
+    for it: a refusal is an answer, and the agent that let it pass once will let it pass again."""
     pending = []
     for earlier in store.recent_turns(turn["session_id"], 3)[1:]:
         missing = earlier["gate_count"] - len(earlier["captured_ids"])
         if earlier["origin"] == "interactive" and earlier["prompt_excerpt"] and missing > 0 \
-                and earlier["expires_at"] > store.clock():
+                and earlier["expires_at"] > store.clock() and "pending_offered" not in earlier["flags"] \
+                and not store.captures_for_turn(earlier["session_id"], earlier["turn_key"]):
             pending.append({"token": earlier["token"], "facts_not_captured": missing})
+            store.update_turn(earlier["session_id"], earlier["turn_key"], flags=earlier["flags"] + ["pending_offered"])
     return pending
 
 
@@ -185,8 +188,14 @@ def hook_response(event, workspace, store, compiler, strategy="rules", proposals
             # A message often states a fact and asks something; the instruction score is not a veto.
             if not result["facts"] and result["calls"]:
                 flags.append("gate_none")  # a capture the agent proposes anyway needs a near-certain reading
-            if result["facts"]:
-                gate_count = result["facts"]
+            if result["facts"] and result["p_none"] > CONFIDENT_NONE:
+                # An unsure count asked for captures the agent then had to weigh and mostly declined: 71 capture
+                # calls in a week of real use, each a request of its own. Only a confident count is asked.
+                flags.append("gate_unsure")
+            elif result["facts"] and not caps_left(store, turn):
+                flags.append("gate_capped")  # the caps would refuse whatever the agent sent
+            elif result["facts"]:
+                gate_count = min(result["facts"], caps_left(store, turn))
                 # "Implementa todos los puntos" read as one fact at P(none) 0.04; as a request for work (task
                 # 0.91) it gets the capture hint but never hands the turn back.
                 if result["p_none"] <= CONFIDENT_NONE and result.get("task", 0.0) < GATE_TASK_BAR:
@@ -250,7 +259,9 @@ def kernel_requests(marker):
         related = " If one of them changes a fact listed in turn.capture.related, pass that fact's id as replaces." \
             if capture.get("related") else ""
         requests.append(f"The user's message appears to state {capture['facts_stated']} fact(s) worth remembering. If it does, "
-                        f"call the memory_capture tool with token \"{token}\" before answering, one item per fact (entity, "
+                        f"call the memory_capture tool with token \"{token}\" in the same message as your first other tool "
+                        f"call of this turn (a call sent alongside another costs no extra request), or before answering if "
+                        f"the turn needs no other tool; one item per fact (entity, "
                         f"predicate, value, quote: the user's exact words that state it, cues: a few words a later "
                         f"question would use when it matters), using only what the user said." + related +
                         " If it states nothing worth keeping, do nothing and do not mention this request. When something "
@@ -322,7 +333,7 @@ def stop_response(event, workspace, store, judge=None, deadline=None):
     # A capture the kernel refused is an answer, not a miss: asking again would get the same refusal.
     attempted = bool(store.captures_for_turn(session, turn["turn_key"]))
     if tools and missing > 0 and not turn["captured_ids"] and not attempted and turn["origin"] == "interactive" \
-            and "gate_confident" in turn["flags"] and "capture_nudged" not in turn["flags"]:
+            and "gate_confident" in turn["flags"] and "capture_nudged" not in turn["flags"] and capture_policy(store)["stop_nudge"]:
         store.update_turn(session, turn["turn_key"], flags=turn["flags"] + ["capture_nudged"],
                           reply_excerpt=mask_secrets(reply)[:4000])
         return {"decision": "block", "reason": nudge_reason(turn)}
