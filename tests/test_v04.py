@@ -451,7 +451,10 @@ class AutonomyTests(unittest.TestCase):
         packet, _ = self.prompt("We have three months to deliver the checkout project.")
         self.capture(packet, ("checkout_project", "delivery_timeline", "three months"))
         packet, _ = self.prompt("Update: the checkout deadline changed, we now have three weeks.")
-        self.assertEqual(packet["turn"]["capture"]["related"][0]["key"], "checkout_project.delivery_timeline")
+        # The stored fact reaches the agent with its id, as a claim or, when the claims do not carry it, under related.
+        offered = packet["claims"] + packet["turn"]["capture"].get("related", [])
+        self.assertIn("checkout_project.delivery_timeline",
+                      [c.get("key") or f"{c['entity']}.{c['predicate']}" for c in offered])
         result = self.capture(packet, ("checkout", "deadline", "three weeks"))[0]
         self.assertEqual((result["status"], result["resolved_from"]), ("captured", "checkout.deadline"))
         self.assertEqual([r["value"] for r in self.current("checkout_project", "delivery_timeline")], ["three weeks"])

@@ -170,7 +170,7 @@ def hook_response(event, workspace, store, compiler, strategy="rules", proposals
         # No content-derived event hashes persist unless proposal capture is enabled.
         if not store.db.execute("SELECT 1 FROM processed_events WHERE scope=? AND event_id=?", (store.scope, event_id)).fetchone():
             notice = propose_command(store, prompt, event_id)
-    gate_count = 0
+    gate_count, related = 0, []
     cold = judge is not None and judge_cold(judge)
     if cold:
         # Loading the model takes seconds the prompt should not wait for: this prompt is answered from keyword
@@ -200,11 +200,9 @@ def hook_response(event, workspace, store, compiler, strategy="rules", proposals
                 # 0.91) it gets the capture hint but never hands the turn back.
                 if result["p_none"] <= CONFIDENT_NONE and result.get("task", 0.0) < GATE_TASK_BAR:
                     flags.append("gate_confident")
-                marker["capture"] = {"facts_stated": gate_count, "call": "memory_capture",
-                                     "how": "Extract each as entity.predicate = value. If one changes a fact in related, pass its id as replaces."}
+                # How to extract is said in the plain-text request; the packet carries only the data.
+                marker["capture"] = {"facts_stated": gate_count, "call": "memory_capture"}
                 related = related_facts(store, prompt)
-                if related:
-                    marker["capture"]["related"] = related
         except KernelError:
             flags.append("gate_unavailable")
     # Pending captures ride along in the marker; they do not justify judging an "ok" for relevance. Nor does
@@ -216,10 +214,14 @@ def hook_response(event, workspace, store, compiler, strategy="rules", proposals
     # A claim this session was already given is still in its context: delivering it again on every prompt
     # was a third of all deliveries over a week of real prompts, and each one is paid for again.
     earlier = store.delivered_in_session(turn["session_id"], store.session_field(turn["session_id"], "context_since"))
+    # Related facts fill what the claims leave of the budget, and none the claims already carry.
+    fill = (marker["capture"], "related", related) if related and isinstance(marker.get("capture"), dict) else None
     if quiet:
-        projection = compiler.project(prompt, plan=NeedPlan(strategy=selection), extra={"turn": marker}, pinned=pinned)
+        projection = compiler.project(prompt, plan=NeedPlan(strategy=selection), extra={"turn": marker}, pinned=pinned,
+                                      fill=fill)
     else:
-        projection = compiler.prepare(typed, strategy=selection, extra={"turn": marker}, pinned=pinned, delivered=earlier)
+        projection = compiler.prepare(typed, strategy=selection, extra={"turn": marker}, pinned=pinned, delivered=earlier,
+                                      fill=fill)
     store.update_turn(turn["session_id"], turn["turn_key"], projection_id=projection.id,
                       delivered_ids=projection.trace["selected"], gate_count=gate_count, flags=flags)
     # "Ya publicamos la v0.3": something delivered may be over. Asked in plain text after the packet was built,
@@ -259,8 +261,8 @@ def kernel_requests(marker):
     requests = []
     capture = marker.get("capture")
     if isinstance(capture, dict):
-        related = " If one of them changes a fact listed in turn.capture.related, pass that fact's id as replaces." \
-            if capture.get("related") else ""
+        related = " If one of them changes a stored fact (in the claims or turn.capture.related), pass that fact's id as " \
+                  "replaces."
         requests.append(f"The user's message appears to state {capture['facts_stated']} fact(s) worth remembering. If it does, "
                         f"call the memory_capture tool with token \"{token}\" in the same message as your first other tool "
                         f"call of this turn (a call sent alongside another costs no extra request), or before answering if "

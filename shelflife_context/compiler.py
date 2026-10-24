@@ -93,13 +93,17 @@ class Compiler:
         self.store, self.budget, self.jev = store, budget, jev
         self.deadline, self.allow_remote = deadline, allow_remote
 
-    def project(self, query, strategy="rules", plan=None, as_of=None, extra=None, pinned=(), delivered=()):
+    def project(self, query, strategy="rules", plan=None, as_of=None, extra=None, pinned=(), delivered=(), fill=None):
         """`extra` holds envelope fields (the turn token, capture instructions) that count toward
         the byte budget and make an otherwise empty packet worth delivering. `pinned` are record ids
         delivered whatever the question (standing facts the session has not received yet). `delivered`
         are ids the session already holds: they are not sent again for being relevant, only when a
-        changed premise or a review brings them."""
+        changed premise or a review brings them. `fill` is (holder, key, items), a list inside `extra` that
+        gives way to the claims: after them, the items whose id the session does not already hold go into
+        holder[key] while the packet stays within budget."""
         started = time.perf_counter()
+        if fill:
+            fill[0].pop(fill[1], None)  # a retry starts again from the claims
         query = text(query, 16384)
         at = timestamp(as_of) if as_of else self.store.clock()
         # Captures nobody confirmed for half a year stop being evidence (still in the inventory).
@@ -288,6 +292,17 @@ class Compiler:
             status = "clarification_required"
         if any(w in warnings for w in ("planner_failed", "inventory_overflow")):
             status = "unavailable"
+        if fill:
+            # The capture's related facts took ~550 bytes ahead of the claims and pushed a critical one out.
+            holder, key, held = fill[0], fill[1], set(included) | set(already)
+            for item in fill[2]:
+                if item["id"] in held:
+                    continue
+                holder.setdefault(key, []).append(item)
+                if len(canonical(packet).encode()) > self.budget:
+                    holder[key].pop()
+            if not holder.get(key):
+                holder.pop(key, None)
         content = canonical(packet) if included or warnings or extra else ""
         if len(content.encode()) > self.budget:
             content = ""
@@ -332,12 +347,12 @@ class Compiler:
         if snapshot_digest(records, relations, projection.trace["selected"]) != projection.trace["snapshot"]:
             raise KernelError("Context changed before delivery; regenerate the projection.")
 
-    def prepare(self, query, strategy="rules", extra=None, pinned=(), delivered=()):
+    def prepare(self, query, strategy="rules", extra=None, pinned=(), delivered=(), fill=None):
         """Project, then revalidate right before delivery; one retry reuses the recorded plan so a
         concurrent change costs no second round of judgments."""
         plan = None
         for attempt in range(2):
-            projection = self.project(query, strategy, plan=plan, extra=extra, pinned=pinned, delivered=delivered)
+            projection = self.project(query, strategy, plan=plan, extra=extra, pinned=pinned, delivered=delivered, fill=fill)
             try:
                 self.revalidate(projection)
                 return projection

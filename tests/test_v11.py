@@ -292,6 +292,20 @@ class StatedDecisionsTests(unittest.TestCase):
              "quote": "an overpayment is rejected with a new `errors.Overpayment`; we never keep it as credit."}])
         self.assertEqual([r["status"] for r in results], ["captured"] * 3)
 
+    def test_claims_come_before_the_capture_hints(self):
+        for name in ("feature_flag_policy", "audit_policy", "overpayment_policy", "numbering_policy"):
+            self.store.remember("invoicer", name, f"{name}: invoice api rule " + "x" * 110, "x", kind="project")
+        context = self.prompt("Add partial payments to the invoice api the way we agreed: record_payment and outstanding. "
+                              "The invoice api policy stays as it is.")
+        packet = packet_of(context)
+        self.assertLessEqual(len(context[context.index("{"):].encode()), 2048)
+        self.assertNotIn("critical_budget_overflow", packet["warnings"])
+        self.assertEqual(len(packet["claims"]), 4)
+        self.assertNotIn("how", packet["turn"]["capture"])
+        claimed = {c["id"] for c in packet["claims"]}
+        self.assertFalse(claimed & {r["id"] for r in packet["turn"]["capture"].get("related", [])})
+        self.assertIn("in the claims or turn.capture.related", context)
+
 
 class CanaryRuleTests(unittest.TestCase):
     """The canary fails a judge only for a row on the wrong side of a bar; a row in the review band is reported."""
