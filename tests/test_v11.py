@@ -111,6 +111,24 @@ class FallbackTests(unittest.TestCase):
         self.assertEqual(len(projection.trace["selected"]), 2)
 
 
+class JudgeLoadTests(unittest.TestCase):
+    def test_the_judge_gets_what_fits_in_its_seconds_likely_pairs_first(self):
+        from shelflife_context.planner import DEFAULT_PAIR_SECONDS, JUDGE_SECONDS
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / "memory.sqlite", create=True)
+            try:
+                for n in range(30):
+                    store.remember(f"service{n}", "status", "deploy pending", canonical("deploy pending"))
+                store.remember("deploy", "pipeline", "GitHub Actions", canonical("GitHub Actions"))
+                judge = FakeJudge(rank=lambda query, line, question: 0.9)
+                Compiler(store, jev=judge).project("which pipeline runs the deploy?", strategy="jev")
+                judged = [line for call in judge.calls if call[0] == "rank" for line in call[2]]
+                self.assertEqual(len(judged), int(JUDGE_SECONDS / DEFAULT_PAIR_SECONDS))
+                self.assertTrue(judged[0].startswith("deploy pipeline"))
+            finally:
+                store.close()
+
+
 class CaptureCostTests(unittest.TestCase):
     """Asking for a capture costs requests: ask only when sure, never hand the turn back unasked, re-ask once."""
 

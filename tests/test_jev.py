@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from shelflife_context.adapters import configuration, hook_response
 from shelflife_context.common import KernelError, canonical
@@ -210,7 +211,8 @@ class JevTests(unittest.TestCase):
     def test_at_most_sixteen_needs_are_kept(self):
         os.environ["FAKE_JEV_SCORES"] = json.dumps({f"user p{n}": 0.9 for n in range(20)})
         records = [self.add(f"p{n}", n) for n in range(20)]
-        plan, usage = jev_plan("my numbers", self.store.records(), self.jev)
+        with patch("shelflife_context.planner.JUDGE_SECONDS", 10):  # time to judge all twenty
+            plan, usage = jev_plan("my numbers", self.store.records(), self.jev)
         self.assertEqual(len(plan.needs), 16)
         self.assertEqual(len(usage["scores"]), 20)
 

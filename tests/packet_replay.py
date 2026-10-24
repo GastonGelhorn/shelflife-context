@@ -2,7 +2,7 @@
 cost in judge calls and time, and, with labels, how much of it was relevant.
 
   python3 -m tests.packet_replay extract --days 7 --sample 150 --out DIR/prompts.jsonl
-  python3 -m tests.packet_replay run --prompts DIR/prompts.jsonl --db DIR/memory.sqlite --out DIR/before.jsonl
+  python3 -m tests.packet_replay run --prompts DIR/prompts.jsonl --db DIR/memory.sqlite --out DIR/before.jsonl [--strategy rules]
   python3 -m tests.packet_replay score DIR/before.jsonl [--labels DIR/labels.jsonl]
 
 The prompts are the owner's own words and the store holds their memory: keep both, and the labels, outside
@@ -88,12 +88,12 @@ def _ledger_rows(home):
         return []
 
 
-def run(prompts, db, out, scope="work", jev=None):
+def run(prompts, db, out, scope="work", jev=None, strategy="jev"):
     db = Path(db).expanduser().resolve()
     if db == LIVE.resolve():
         raise SystemExit("run needs a copy of the store, never the live one")
     from shelflife_context.plugin import find_jev
-    jev = jev or find_jev()
+    jev = (jev or find_jev()) if strategy == "jev" else None
     home = _jev_home(db.parent)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE_PLUGIN_OPTION_", "JEV_SESSION", "JEV_AGENT"))}
     env.update(JEV_HOME=str(home), PYTHONPATH=str(Path(__file__).resolve().parents[1]))
@@ -179,6 +179,7 @@ def main(argv=None):
     r.add_argument("--out", required=True)
     r.add_argument("--scope", default="work")
     r.add_argument("--jev")
+    r.add_argument("--strategy", choices=("jev", "rules"), default="jev", help="rules: no judge at all")
     s = sub.add_parser("score")
     s.add_argument("result")
     s.add_argument("--labels")
@@ -186,7 +187,7 @@ def main(argv=None):
     if args.command == "extract":
         extract(args.days, args.sample, args.out)
     elif args.command == "run":
-        run(args.prompts, args.db, args.out, args.scope, args.jev)
+        run(args.prompts, args.db, args.out, args.scope, args.jev, args.strategy)
     else:
         score(args.result, args.labels)
 

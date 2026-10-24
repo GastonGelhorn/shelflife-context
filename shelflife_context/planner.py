@@ -163,6 +163,11 @@ PACE_KEY = "judge_pair_seconds"
 # the full 8 s (tests/bench.py).
 RECENT_PAIRS = 4
 PATIENCE_SECONDS = 3.0
+# Over a week of real prompts (tests/packet_replay.py) the judge was handed 27 pairs a prompt and took 7 s of
+# every prompt, with Ollama serving one request at a time: jevmate's guard waited behind it, and 28% of prompts
+# ran out of budget and fell back to keywords. The packet's byte budget let through about two claims anyway.
+# So judging stops at JUDGE_SECONDS, the likely pairs first.
+JUDGE_SECONDS = 2.5
 
 
 def affordable_pairs(deadline, pace, limit, reserve=RESERVE_SECONDS):
@@ -235,9 +240,10 @@ def jev_plan(query, records, jev, relations=(), lexical=(), cache=None, deadline
         recent = set(sorted(pairs, key=lambda k: latest[k], reverse=True)[:RECENT_PAIRS])
         likely = {k for k in keys if k in strength or k in lasting or k in recent}
         cached_keys = [k for k in keys if digests[k] in known]
-        fresh_keys = [k for k in keys if digests[k] not in known and k in likely][:affordable_pairs(deadline, pace, jev.max_pairs)]
-        spare = min(jev.max_pairs - len(fresh_keys),
-                    affordable_pairs(deadline, pace, jev.max_pairs, RESERVE_SECONDS + PATIENCE_SECONDS) - len(fresh_keys))
+        limit = min(jev.max_pairs, int(JUDGE_SECONDS / max(pace, 0.01)))
+        fresh_keys = [k for k in keys if digests[k] not in known and k in likely][:affordable_pairs(deadline, pace, limit)]
+        spare = min(limit - len(fresh_keys),
+                    affordable_pairs(deadline, pace, limit, RESERVE_SECONDS + PATIENCE_SECONDS) - len(fresh_keys))
         fresh_keys += [k for k in keys if digests[k] not in known and k not in likely][:max(0, spare)]
         judged = cached_keys + fresh_keys
         if len(judged) < len(keys):
