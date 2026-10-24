@@ -78,5 +78,35 @@ class QuietPacketTests(unittest.TestCase):
         self.assertTrue(packet.get("claims"))
 
 
+class FallbackTests(unittest.TestCase):
+    """When the judge fails, keyword matches are all there is: few, and about what the prompt names."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.store = Store(Path(self.temp.name) / "memory.sqlite", create=True)
+        self.compiler = Compiler(self.store, jev=FakeJudge(fail="down"))
+
+    def tearDown(self):
+        self.store.close()
+        self.temp.cleanup()
+
+    def add(self, entity, predicate, value):
+        return self.store.remember(entity, predicate, value, canonical(value))
+
+    def test_a_word_in_a_value_is_not_enough(self):
+        pipeline = self.add("deploy", "pipeline", "GitHub Actions")
+        for n in range(5):
+            self.add(f"note{n}", "summary", f"talked about the deploy and the release on day {n}")
+        projection = self.compiler.project("how do we deploy?", strategy="jev")
+        self.assertIn("jev_unavailable", projection.trace["warnings"])
+        self.assertEqual(projection.trace["selected"], [pipeline["id"]])
+
+    def test_at_most_two_matches(self):
+        for predicate in ("pipeline", "region", "owner", "schedule"):
+            self.add("deploy", predicate, "x")
+        projection = self.compiler.project("how do we deploy?", strategy="jev")
+        self.assertEqual(len(projection.trace["selected"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
