@@ -37,7 +37,8 @@ DEFAULT_POLICY = {
     # 0.76 or more, the highest false one (a question) 0.757. The band below holds, not delivers.
     "thresholds": {"affirmed": 0.75, "uncertain": 0.6, "none_bar": NONE_BAR, "sarcasm": 0.6, "past": 0.7, "task": 0.6,
                    "unprompted": 0.9},
-    "caps": {"turn": 2, "session": 10, "day": 30},
+    # Three decisions in one message are common ("from now on: 1. … 2. … 3. …"); at two a turn the third was dropped.
+    "caps": {"turn": 4, "session": 10, "day": 30},
     # Decision records of the repository a session runs in (repository.py); commit messages only when
     # `repository_commits` is on: a commit subject is a weaker source than a record a team wrote.
     "repository": True,
@@ -261,23 +262,32 @@ def _sentences(value):
     return [s.strip() for s in re.split(r"(?<=[.!?\n;])\s+", value) if s.strip()]
 
 
+def _runs(value, longest=3):
+    """Each sentence of `value`, then each run of two and of three in a row: a quote may cross a ';'
+    ("off by default; while its flag is off, …") or a full stop."""
+    sentences = _sentences(value)
+    for size in range(1, longest + 1):
+        for start in range(len(sentences) - size + 1):
+            yield " ".join(sentences[start:start + size])
+
+
 def locate_quote(quote, value):
-    """The sentence of `value` that holds `quote`, the user's own words the agent cited, or None.
-    Case, accents, quotes and spacing are ignored; an agent that dropped a filler word still matches
-    when four in five of the quote's words appear in one sentence."""
+    """The sentence (or the shortest run of up to three) of `value` that holds `quote`, the user's own
+    words the agent cited, or None. Case, accents, quotes and spacing are ignored; an agent that dropped
+    a filler word still matches when four in five of the quote's words appear in one run."""
     wanted = _normal(quote)
     if len(wanted) < 3 or not value:
         return None
-    for sentence in _sentences(value):
-        if wanted in _normal(sentence):
-            return sentence
+    for run in _runs(value):
+        if wanted in _normal(run):
+            return run
     words = [w for w in re.findall(r"[^\W_]+", wanted) if len(w) > 2]
     if len(words) < 3:
         return None
-    for sentence in _sentences(value):
-        present = set(re.findall(r"[^\W_]+", _normal(sentence)))
+    for run in _runs(value):
+        present = set(re.findall(r"[^\W_]+", _normal(run)))
         if sum(1 for w in words if w in present) >= 0.8 * len(words):
-            return sentence
+            return run
     return None
 
 

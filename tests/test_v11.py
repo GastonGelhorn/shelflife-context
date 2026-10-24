@@ -12,7 +12,7 @@ import unittest
 from shelflife_context import cli
 
 from shelflife_context.adapters import hook_response, packet_of, stop_response
-from shelflife_context.capture import segments
+from shelflife_context.capture import locate_quote, segments
 from shelflife_context.common import canonical, timestamp, timestamp_offset
 from shelflife_context.compiler import READER_RULES, Compiler
 from shelflife_context.mcp import INSTRUCTIONS, Server
@@ -229,6 +229,65 @@ class CaptureCostTests(unittest.TestCase):
     def test_captured_claims_are_described_as_what_they_are(self):
         self.assertFalse([r for r in READER_RULES if "kernel's reading" in r])
         self.assertNotIn("readings", INSTRUCTIONS)
+
+
+DECISIONS = ("Three decisions for this codebase, from now on:\n"
+             "1. Every new feature goes behind a flag in `invoicer/config.py` `FEATURES`, off by default; while its flag is off, "
+             "the feature's api functions raise `errors.FeatureDisabled`.\n"
+             "2. Every function in `api.py` that changes an invoice writes an audit entry with `audit.record(action, invoice_id, ...)`.\n"
+             "3. When we build partial payments, an overpayment is rejected with a new `errors.Overpayment`; we never keep it as credit.")
+
+
+class StatedDecisionsTests(unittest.TestCase):
+    """Three decisions stated in one message are all saved, and a later message gets them as claims."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.temp.name)
+        self.now = "2026-10-25T12:00:00+00:00"
+        self.store = Store(self.workspace / "memory.sqlite", clock=lambda: timestamp(self.now), create=True)
+        self.judge = FakeJudge(rank=lambda query, line, question: 0.9, ask=answers(category="constraints", count="several"))
+        self.compiler = Compiler(self.store, jev=self.judge)
+        self.turns = 0
+
+    def tearDown(self):
+        self.store.close()
+        self.temp.cleanup()
+
+    def prompt(self, text):
+        self.now = timestamp_offset(self.now, 60)
+        self.turns += 1
+        event = {"cwd": str(self.workspace), "prompt": text, "session_id": f"s{self.turns}", "prompt_id": f"p{self.turns}"}
+        response, _ = hook_response(event, self.workspace, self.store, self.compiler, strategy="jev", judge=self.judge)
+        self.store.register_session(event["session_id"], "claude", [HOST])
+        return response["hookSpecificOutput"]["additionalContext"]
+
+    def capture(self, context, facts):
+        server = Server(self.store, self.compiler, judge=self.judge, parent=HOST)
+        server.dispatch({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {}}})
+        server.dispatch({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        response = server.dispatch({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "memory_capture",
+                                    "arguments": {"token": packet_of(context)["turn"]["token"], "facts": facts}}})
+        return response["result"]["structuredContent"]["results"]
+
+    def test_a_quote_may_cross_a_semicolon_or_a_full_stop(self):
+        cited = locate_quote("an overpayment is rejected with a new `errors.Overpayment`; we never keep it as credit.", DECISIONS)
+        self.assertTrue(cited.startswith("When we build") and cited.endswith("keep it as credit."))
+        self.assertTrue(locate_quote("Ship on Friday. Not before.", "Plan: ship on Friday. Not before. Thanks."))
+        self.assertIsNone(locate_quote("ship on Monday", "Plan: ship on Friday. Not before."))
+
+    def test_three_decisions_in_one_message_are_all_saved(self):
+        context = self.prompt(DECISIONS)
+        results = self.capture(context, [
+            {"entity": "invoicer", "predicate": "feature_flag_policy", "value": "new features behind an off-by-default flag",
+             "quote": "Every new feature goes behind a flag in `invoicer/config.py` `FEATURES`, off by default; while its flag is "
+                      "off, the feature's api functions raise `errors.FeatureDisabled`."},
+            {"entity": "invoicer", "predicate": "audit_policy", "value": "invoice changes write an audit entry",
+             "quote": "Every function in `api.py` that changes an invoice writes an audit entry"},
+            {"entity": "invoicer", "predicate": "overpayment_policy", "value": "overpayment rejected with errors.Overpayment",
+             "quote": "an overpayment is rejected with a new `errors.Overpayment`; we never keep it as credit."}])
+        self.assertEqual([r["status"] for r in results], ["captured"] * 3)
 
 
 if __name__ == "__main__":

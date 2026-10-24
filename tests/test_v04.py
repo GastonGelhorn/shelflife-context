@@ -290,9 +290,10 @@ class AutonomyTests(unittest.TestCase):
         self.assertEqual([r["value"] for r in self.current("user", "manager")], ["Ana"])
 
     def test_captures_beyond_the_cap_are_counted_as_omitted(self):
-        packet, _ = self.prompt("Tres datos")
-        results = self.capture(packet, ("a", "x", "1"), ("b", "x", "2"), ("c", "x", "3"))
-        self.assertEqual([r["status"] for r in results], ["captured", "captured", "omitted"])
+        packet, _ = self.prompt("Cinco datos")
+        results = self.capture(packet, *[(name, "x", str(n)) for n, name in enumerate("abcd")])
+        results += self.capture(packet, ("e", "x", "4"))
+        self.assertEqual([r["status"] for r in results], ["captured"] * 4 + ["omitted"])
         self.assertIn({"outcome": "omitted", "reason": "cap", "count": 1}, self.store.capture_metrics())
 
     def test_a_session_open_for_days_goes_on_saving(self):
