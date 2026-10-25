@@ -115,6 +115,10 @@ sessions in a row:
    rule exists only in what the owner said in session 1.
 3. A customer reports a total one cent lower than the sum of its lines; find the cause, fix it, add a test.
 
+When session 2 misses a decision, the owner reviews it and restates the ones it missed in one more session before
+session 3, as a person would. Every variant then reaches session 3 with the same code, and the chain's cost is what
+it took to get there, so the saving is measured at equal correctness.
+
 The variants are no plugin, jevmate, Shelflife (this checkout's kernel, judged by jev) and both. Claude Code's
 own auto memory is off in all of them. After each session the harness commits the work and
 `tests/savings_probe.py` checks it: the suite passes, the feature works, each decision was applied, and in

@@ -8,6 +8,9 @@ sessions in a row, sharing the repository and, where wired, the memory store:
   S2  "add partial payments the way we agreed": the decisions are needed and nobody restates them;
   S3  a customer reports a one-cent difference; find the cause, fix it, add a test that would have caught it.
 
+When S2 misses a decision, the owner reviews it and says which, as a person would, in one more session before S3
+(the fix). Every variant then reaches S3 with the same code, and the chain's cost is what it took to get there.
+
 Variants differ only in what is wired in: none, jevmate (the plugin), shelflife (the kernel from this checkout,
 with jev selection), both. Claude Code's own auto memory is off in all of them, so "none" carries nothing from
 one session to the next but the code. Bash, Read, Edit, Write, Glob and Grep are allowed in every variant.
@@ -69,6 +72,13 @@ SESSIONS = [
     ("s3", "A customer says invoice INV-2026-0042 shows a total one cent lower than the sum of its lines. Find the "
            "cause and fix it, with a test that would have caught it. Then tell me the cause in one sentence."),
 ]
+# What the owner says, after reviewing S2, about each decision it missed.
+FIXES = {
+    "decision_flag": "partial payments go behind a flag in `invoicer/config.py` `FEATURES`, off by default; while it is off, "
+                     "`record_payment` and `outstanding` raise `errors.FeatureDisabled`",
+    "decision_audit": "`record_payment` writes an audit entry with `audit.record(action, invoice_id, ...)`",
+    "decision_overpayment": "an overpayment is rejected with a new `errors.Overpayment`; we never keep it as credit",
+}
 # S3's answer names where the bug is and what it does.
 CAUSE = ({"line_tax", "tax.py"}, {"floor", "trunc", "//", "round down", "rounds down", "rounded down", "integer division",
                                  "half up", "half-up"})
@@ -182,6 +192,15 @@ def invoke(claude, root, prompt, mcp_path, allowed, model, env, max_turns):
     return out
 
 
+def correction(checks):
+    """The owner's review of S2: the decisions it missed, restated, or None when it applied them all."""
+    missed = [text for key, text in FIXES.items() if any(not ok for name, ok in checks.items() if name.startswith(key))]
+    if not missed:
+        return None
+    return "Partial payments don't follow what we agreed:\n" + "\n".join(f"- {m}" for m in missed) + \
+        "\n\nFix that, with tests, and run the suite."
+
+
 def probe(root, stage, known=None):
     command = [sys.executable, "-I", str(PROBE), stage, str(root)] + (["--known-flags", ",".join(known)] if known else [])
     done = subprocess.run(command, capture_output=True, text=True, timeout=600)
@@ -216,15 +235,16 @@ def run_variant(claude, base, variant, model, jev_command, home, max_turns, sess
     database, mcp_path, hook_log, allowed = prepare(root, variant, jev_command)
     env, steps, known, signature = environment(home), [], None, None
     head = commit(root, "Invoicing service")
-    for stage, prompt in [s for s in SESSIONS if s[0] in sessions]:
+
+    def session(stage, prompt, checks_as, known):
+        nonlocal head, signature
         before_ledger, before_head = len(ledger(home)), head
         result = invoke(claude, root, prompt, mcp_path, allowed, model, env, max_turns)
         calls = ledger(home)[before_ledger:]
         result["jev"] = {"calls": len(calls), "ms": sum(c.get("ms", 0) for c in calls),
                          "by_agent": {a: sum(1 for c in calls if c.get("agent") == a) for a in {c.get("agent") for c in calls}}}
         head = commit(root, f"Session {stage}")
-        result["probe"] = probe(root, stage, known)
-        known = result["probe"].get("features") or known
+        result["probe"] = probe(root, checks_as, known)
         if stage == "s3":
             answer = (result.get("answer") or "").casefold()
             result["probe"]["checks"]["regression_test"] = catches_the_bug(root, before_head)
@@ -239,6 +259,13 @@ def run_variant(claude, base, variant, model, jev_command, home, max_turns, sess
             raise Unusable(result.get("answer") or result.get("stderr") or "the session failed before any request")
         print(f"  {stage}: ${result.get('cost_usd') or 0:.3f} · {result.get('num_turns')} turns · {result['seconds']} s · "
               f"{sum(result['probe']['checks'].values())}/{len(result['probe']['checks'])} checks", file=sys.stderr, flush=True)
+        return result
+
+    for stage, prompt in [s for s in SESSIONS if s[0] in sessions]:
+        result = session(stage, prompt, stage, known)
+        if stage == "s2" and (fix := correction(result["probe"]["checks"])):
+            session("s2fix", fix, "s2", known)  # checked against what S2 should have done, with the flags S1 left
+        known = result["probe"].get("features") or known
     hooks = [json.loads(line) for line in hook_log.read_text().splitlines()] if hook_log.exists() else []
     return {"variant": variant, "steps": steps, "hook_ms": hooks, "kernel": kernel_summary(database) if database else None}
 
@@ -285,7 +312,7 @@ def summarize(runs, sessions):
             continue
         row = {"runs": len(mine)}
         for stage in sessions + ["chain"]:
-            steps = [s for r in mine for s in r["steps"] if stage == "chain" or s["stage"] == stage]
+            steps = [s for r in mine for s in r["steps"] if s["stage"] == stage or (stage == "chain" and s["stage"] != "s2fix")]
             per_run = [sum(s.get("cost_usd") or 0 for s in r["steps"] if stage == "chain" or s["stage"] == stage) for r in mine]
             checks = [v for s in steps for v in s["probe"]["checks"].values()]
             decisions = [v for s in steps for k, v in s["probe"]["checks"].items() if k.startswith("decision_")]
@@ -303,6 +330,12 @@ def summarize(runs, sessions):
                 "judge_calls": sum(s.get("jev", {}).get("calls", 0) for s in steps),
                 "errors": sum(bool(s["exit_code"] or s.get("is_error")) for s in steps),
             }
+        fixes = [s for r in mine for s in r["steps"] if s["stage"] == "s2fix"]
+        after = [v for r in mine for s in [x for x in r["steps"] if x["stage"] in ("s2", "s2fix")][-1:]
+                 for k, v in s["probe"]["checks"].items() if k.startswith("decision_")]
+        row["s2fix"] = {"runs": len(fixes), "cost_usd": spread([sum(s.get("cost_usd") or 0 for s in r["steps"] if s["stage"] == "s2fix")
+                                                                 for r in mine]),
+                        "decisions_after": f"{sum(after)}/{len(after)}" if after else None}
         hook = {}
         for r in mine:
             for h in r["hook_ms"]:
@@ -326,18 +359,23 @@ def markdown(report):
     lines = [f"# Savings bench", "", f"{report['client']} · model {report['model']} · {len(report['runs'])} runs · "
              f"{report['started']}", ""]
     sessions = report["sessions"]
-    lines += ["| Variant | " + " | ".join(s.upper() for s in sessions) + " | Chain | Saving vs none | Checks | Decisions in S2 |",
-              "| --- |" + " --- |" * (len(sessions) + 4)]
+    lines += ["| Variant | " + " | ".join(s.upper() for s in sessions) + " | Fix | Chain | Saving vs none | Checks | "
+              "Decisions in S2 | After the fix |", "| --- |" + " --- |" * (len(sessions) + 6)]
     for variant, row in report["summary"].items():
         cells = [f"${row[s]['cost_usd']['mean']:.3f} ({row[s]['cost_usd']['min']:.3f}–{row[s]['cost_usd']['max']:.3f})" for s in sessions]
         chain = row["chain"]
         saving = "–" if variant == "none" or chain.get("saving_vs_none") is None else \
             f"{chain['saving_vs_none']:+.0%}" + (" (noise)" if chain["within_noise"] else "")
-        lines.append(f"| {variant} | " + " | ".join(cells) + f" | ${chain['cost_usd']['mean']:.3f} | {saving} | "
-                     f"{chain['checks_passed']} | {row.get('s2', {}).get('decisions_applied') or '–'} |")
+        fix = row.get("s2fix") or {}
+        fixed = f"${fix['cost_usd']['mean']:.3f} ({fix['runs']} of {row['runs']})" if fix.get("runs") else "–"
+        lines.append(f"| {variant} | " + " | ".join(cells) + f" | {fixed} | ${chain['cost_usd']['mean']:.3f} | {saving} | "
+                     f"{chain['checks_passed']} | {row.get('s2', {}).get('decisions_applied') or '–'} | "
+                     f"{fix.get('decisions_after') or '–'} |")
     lines += ["", "Cost per session: mean (min–max) over repetitions. A saving is marked noise when the spread of "
               "either variant is larger than the difference. S1 states the decisions in its own prompt; S2 is where "
-              "they have to come from somewhere.", ""]
+              "they have to come from somewhere. Fix: the session in which the owner restates the decisions S2 missed "
+              "(mean over every run, those without one counting as zero; how many runs needed it). Chain includes it; "
+              "Checks count first attempts.", ""]
     for variant, row in report["summary"].items():
         lines.append(f"- **{variant}**: " + "; ".join(
             f"{s.upper()} {row[s]['turns']['mean']:.0f} turns, {row[s]['seconds']['mean']:.0f} s, "
